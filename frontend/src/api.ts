@@ -5,6 +5,34 @@ export type Settings = {
   db_path_2: string;
 };
 
+export type ColumnConfig = {
+  template_key: string;
+  columns: string[];
+  widths: Record<string, number>;
+  general: {
+    default_width: number;
+    min_width: number;
+    row_limit: number;
+    hide_money_cents: boolean;
+  };
+};
+
+export type ColumnTypeConfig = {
+  template_key: string;
+  overrides: Record<string, string>;
+};
+
+export type FilterConfig = {
+  template_key: string;
+  filters: Record<string, {
+    text: string;
+    operator: string;
+    value: string;
+    from: string;
+    to: string;
+  }>;
+};
+
 export type TemplateInfo = {
   key: string;
   display_name: string;
@@ -18,6 +46,8 @@ export type LoadResponse = {
   status: string;
   rows: Record<string, unknown>[];
   errors: Record<string, unknown>[];
+  headers: string[];
+  source_file: string;
 };
 
 export type AnalysisResponse = {
@@ -54,6 +84,56 @@ export async function getTemplates(): Promise<TemplateInfo[]> {
   return parseJson<TemplateInfo[]>(await fetch(`${API_BASE}/templates`));
 }
 
+export async function getColumnConfig(templateKey: string): Promise<ColumnConfig> {
+  return parseJson<ColumnConfig>(await fetch(`${API_BASE}/column-configs/${encodeURIComponent(templateKey)}`));
+}
+
+export async function saveColumnConfig(
+  templateKey: string,
+  columns: string[],
+  widths: Record<string, number>,
+  general: ColumnConfig["general"],
+): Promise<ColumnConfig> {
+  return parseJson<ColumnConfig>(
+    await fetch(`${API_BASE}/column-configs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template_key: templateKey, columns, widths, general }),
+    }),
+  );
+}
+
+export async function getColumnTypeConfig(templateKey: string): Promise<ColumnTypeConfig> {
+  return parseJson<ColumnTypeConfig>(await fetch(`${API_BASE}/column-type-configs/${encodeURIComponent(templateKey)}`));
+}
+
+export async function saveColumnTypeConfig(templateKey: string, overrides: Record<string, string>): Promise<ColumnTypeConfig> {
+  return parseJson<ColumnTypeConfig>(
+    await fetch(`${API_BASE}/column-type-configs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template_key: templateKey, overrides }),
+    }),
+  );
+}
+
+export async function getFilterConfig(templateKey: string): Promise<FilterConfig> {
+  return parseJson<FilterConfig>(await fetch(`${API_BASE}/filter-configs/${encodeURIComponent(templateKey)}`));
+}
+
+export async function saveFilterConfig(
+  templateKey: string,
+  filters: FilterConfig["filters"],
+): Promise<FilterConfig> {
+  return parseJson<FilterConfig>(
+    await fetch(`${API_BASE}/filter-configs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ template_key: templateKey, filters }),
+    }),
+  );
+}
+
 export async function uploadFacts(templateKey: string, file: File): Promise<LoadResponse> {
   const fd = new FormData();
   fd.append("file", file);
@@ -63,6 +143,14 @@ export async function uploadFacts(templateKey: string, file: File): Promise<Load
     body: fd,
   });
   return parseJson<LoadResponse>(res);
+}
+
+export async function loadDowntimeFacts(): Promise<LoadResponse> {
+  return parseJson<LoadResponse>(
+    await fetch(`${API_BASE}/facts/load-downtime`, {
+      method: "POST",
+    }),
+  );
 }
 
 export async function runAnalysis(mode: "prepare" | "satisfaction"): Promise<AnalysisResponse> {

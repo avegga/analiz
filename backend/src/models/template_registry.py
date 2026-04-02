@@ -33,6 +33,13 @@ _REGISTRY: dict[str, Template] = {
             ColumnSpec("Удовлетворенность клиента", "str", False),
             ColumnSpec("оценка_клиента_от_1_до-5", "str", False),
         ],
+    ),
+    "downtime": Template(
+        key="downtime",
+        display_name="Простои",
+        sheet_index=0,
+        header_row=0,
+        columns=[],
     )
 }
 
