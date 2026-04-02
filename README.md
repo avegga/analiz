@@ -7,6 +7,7 @@
 - `backend/` — FastAPI API для загрузки xlsx, анализа и экспорта.
 - `frontend/` — React + Vite интерфейс.
 - `start-web.ps1` — единый запуск backend и frontend.
+- `stop-web.ps1` — остановка backend и frontend по рабочим портам.
 
 ## Быстрый старт
 
@@ -32,6 +33,12 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\start-web.ps1
 ```
 
+Остановка:
+
+```powershell
+.\stop-web.ps1
+```
+
 После запуска сервисы доступны по адресам:
 
 - Frontend: `http://127.0.0.1:5173/`
@@ -52,3 +59,9 @@ Frontend:
 cd frontend
 npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
+
+## Публикация
+
+GitHub-репозиторий проекта:
+
+- `https://github.com/avegga/analiz`
