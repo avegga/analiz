@@ -71,6 +71,15 @@ const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "analiz.columnWidths";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
 const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
   {
+    id: "2026-04-03T14:02:00",
+    title: "03.04.2026 14:02:00",
+    text: [
+      "Исправлено вычисление отображаемого порядка столбцов в таблице 'Данные'.",
+      "- Таблица теперь берёт порядок отображения из пользовательского списка выбранных столбцов, а не из исходного порядка заголовков файла.",
+      "- После нажатия на стрелки столбец должен менять место сразу и визуально оставаться на новой позиции.",
+    ].join("\n"),
+  },
+  {
     id: "2026-04-03T13:44:00",
     title: "03.04.2026 13:44:00",
     text: [
@@ -796,7 +805,7 @@ function App() {
     if (!loadHeaders.length) {
       return [];
     }
-    return loadHeaders.filter((header) => visibleFactColumns.includes(header));
+    return orderColumnsByHeaders(loadHeaders, visibleFactColumns);
   }, [loadHeaders, visibleFactColumns]);
 
   const hasPendingColumnSelectionChanges = useMemo(() => {
