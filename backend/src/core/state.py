@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 
@@ -7,6 +8,7 @@ class AppState:
         self.errors: list[dict[str, Any]] = []
         self.total_rows: int = 0
         self.current_template_key: str = ""
+        self.settings_tokens: dict[str, datetime] = {}
 
 
 state = AppState()

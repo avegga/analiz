@@ -18,7 +18,7 @@ def _decode_html_bytes(raw_bytes: bytes) -> str:
 
 
 def _looks_like_html(raw_bytes: bytes) -> bool:
-    prefix = raw_bytes[:512].lstrip()
+    prefix = raw_bytes[:512].lstrip().removeprefix(b"\xef\xbb\xbf")
     lowered = prefix.lower()
     return lowered.startswith(b"<html") or lowered.startswith(b"<!doctype html") or b"<table" in lowered
 

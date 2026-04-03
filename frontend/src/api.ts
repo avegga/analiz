@@ -1,8 +1,23 @@
 const API_BASE = "http://127.0.0.1:8001/api";
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export type Settings = {
   db_path_1: string;
   db_path_2: string;
+};
+
+export type SettingsSummary = {
+  has_db_path_1: boolean;
+  has_db_path_2: boolean;
 };
 
 export type ColumnConfig = {
@@ -58,23 +73,58 @@ export type AnalysisResponse = {
   status: string;
 };
 
+async function getErrorMessage(res: Response): Promise<string> {
+  const text = await res.text();
+  if (!text) {
+    return `HTTP ${res.status}`;
+  }
+
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail;
+    }
+  } catch {
+    // ignore invalid JSON payloads
+  }
+
+  return text;
+}
+
 async function parseJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(txt || `HTTP ${res.status}`);
+    throw new ApiError(res.status, await getErrorMessage(res));
   }
   return (await res.json()) as T;
 }
 
-export async function getSettings(): Promise<Settings> {
-  return parseJson<Settings>(await fetch(`${API_BASE}/settings`));
+function createSettingsHeaders(settingsToken?: string): HeadersInit {
+  return settingsToken ? { "X-Settings-Token": settingsToken } : {};
 }
 
-export async function saveSettings(payload: Settings): Promise<Settings> {
+export async function getSettingsSummary(): Promise<SettingsSummary> {
+  return parseJson<SettingsSummary>(await fetch(`${API_BASE}/settings/summary`));
+}
+
+export async function authenticateSettingsAccess(password: string): Promise<{ token: string; expires_in_seconds: number }> {
+  return parseJson<{ token: string; expires_in_seconds: number }>(
+    await fetch(`${API_BASE}/settings/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    }),
+  );
+}
+
+export async function getSettings(settingsToken: string): Promise<Settings> {
+  return parseJson<Settings>(await fetch(`${API_BASE}/settings`, { headers: createSettingsHeaders(settingsToken) }));
+}
+
+export async function saveSettings(payload: Settings, settingsToken: string): Promise<Settings> {
   return parseJson<Settings>(
     await fetch(`${API_BASE}/settings`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...createSettingsHeaders(settingsToken) },
       body: JSON.stringify(payload),
     }),
   );
@@ -185,12 +235,12 @@ export async function exportRows(rows: Record<string, unknown>[], format: "xlsx"
   window.URL.revokeObjectURL(url);
 }
 
-export async function exportXlsxToSettings(rows: Record<string, unknown>[]): Promise<{ saved_path: string; filename: string }> {
+export async function exportXlsxToSettings(rows: Record<string, unknown>[], filename = ""): Promise<{ saved_path: string; filename: string }> {
   return parseJson<{ status: string; saved_path: string; filename: string }>(
     await fetch(`${API_BASE}/export/xlsx-to-settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows, format: "xlsx" }),
+      body: JSON.stringify({ rows, format: "xlsx", filename }),
     }),
   ).then((r) => ({ saved_path: r.saved_path, filename: r.filename }));
 }

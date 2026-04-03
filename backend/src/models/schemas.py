@@ -6,6 +6,20 @@ class SettingsPayload(BaseModel):
     db_path_2: str = ""
 
 
+class SettingsAuthPayload(BaseModel):
+    password: str = ""
+
+
+class SettingsAuthResponse(BaseModel):
+    token: str
+    expires_in_seconds: int
+
+
+class SettingsSummaryResponse(BaseModel):
+    has_db_path_1: bool = False
+    has_db_path_2: bool = False
+
+
 class ColumnConfigPayload(BaseModel):
     template_key: str
     columns: list[str] = Field(default_factory=list)
@@ -47,6 +61,7 @@ class FilterPayload(BaseModel):
 class ExportPayload(BaseModel):
     rows: list[dict] = Field(default_factory=list)
     format: str = Field(default="xlsx", pattern="^(xlsx|csv)$")
+    filename: str = ""
 
 
 class LoadResponse(BaseModel):

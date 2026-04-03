@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import {
+  ApiError,
+  authenticateSettingsAccess,
   getColumnTypeConfig,
   exportRows,
   exportXlsxToSettings,
   getColumnConfig,
   getFilterConfig,
   getSettings,
+  getSettingsSummary,
   getTemplates,
   loadDowntimeFacts,
   runAnalysis,
@@ -21,6 +24,7 @@ import {
   type FilterConfig,
   type LoadResponse,
   type Settings,
+  type SettingsSummary,
   type TemplateInfo,
 } from "./api";
 
@@ -49,8 +53,14 @@ const DOWNTIME_TEMPLATE_KEY = "downtime";
 const DEFAULT_FACTS_PANEL_WIDTH = 320;
 const MIN_FACTS_PANEL_WIDTH = 240;
 const MAX_FACTS_PANEL_WIDTH = 520;
+const DEFAULT_ANALYSIS_PANEL_WIDTH = 220;
+const MIN_ANALYSIS_PANEL_WIDTH = 160;
+const MAX_ANALYSIS_PANEL_WIDTH = 360;
 const DEFAULT_COLUMN_WIDTH = 180;
 const MIN_COLUMN_WIDTH = 60;
+const SETTINGS_TOKEN_STORAGE_KEY = "analiz.settingsAccessToken";
+const ANALYSIS_PANEL_VISIBLE_STORAGE_KEY = "analiz.analysisPanelVisible";
+const ANALYSIS_PANEL_WIDTH_STORAGE_KEY = "analiz.analysisPanelWidth";
 const DEFAULT_FACTS_GENERAL_SETTINGS: FactsGeneralSettings = {
   defaultWidth: DEFAULT_COLUMN_WIDTH,
   minWidth: MIN_COLUMN_WIDTH,
@@ -115,6 +125,35 @@ function fromColumnConfigGeneral(general?: Partial<ColumnConfig["general"]> | nu
     rowLimit: general?.row_limit,
     hideMoneyCents: general?.hide_money_cents,
   });
+}
+
+function readStoredBoolean(key: string, fallback: boolean): boolean {
+  const rawValue = window.localStorage.getItem(key);
+  if (rawValue === null) {
+    return fallback;
+  }
+  return rawValue === "true";
+}
+
+function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
+  const rawValue = Number(window.localStorage.getItem(key));
+  if (!Number.isFinite(rawValue)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, rawValue));
+}
+
+function createTimestampedFileName(prefix: string): string {
+  const now = new Date();
+  const parts = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0"),
+  ];
+  return `${prefix}_${parts[0]}${parts[1]}${parts[2]}_${parts[3]}${parts[4]}${parts[5]}`;
 }
 
 function normalizeExpectedType(expectedType?: string): ColumnKind | null {
@@ -358,13 +397,17 @@ function sanitizeAnalysisRows(rows: Record<string, unknown>[], mode: AnalysisMod
 
 function App() {
   const factsBodyRef = useRef<HTMLDivElement | null>(null);
+  const analysisBodyRef = useRef<HTMLDivElement | null>(null);
   const dataTableBottomScrollRef = useRef<HTMLDivElement | null>(null);
   const dataTableTopScrollRef = useRef<HTMLDivElement | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>("analysis");
+  const [activeTab, setActiveTab] = useState<TabKey>("facts");
   const [settings, setSettings] = useState<Settings>({ db_path_1: "", db_path_2: "" });
+  const [settingsSummary, setSettingsSummary] = useState<SettingsSummary>({ has_db_path_1: false, has_db_path_2: false });
   const [templates, setTemplates] = useState<TemplateInfo[]>([]);
   const [templateKey, setTemplateKey] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [settingsAccessToken, setSettingsAccessToken] = useState(() => window.localStorage.getItem(SETTINGS_TOKEN_STORAGE_KEY) ?? "");
+  const [settingsAuthorized, setSettingsAuthorized] = useState(false);
 
   const [loadResult, setLoadResult] = useState<LoadResponse | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
@@ -388,9 +431,17 @@ function App() {
   const [factsPanelVisible, setFactsPanelVisible] = useState(true);
   const [factsPanelWidth, setFactsPanelWidth] = useState(DEFAULT_FACTS_PANEL_WIDTH);
   const [factsPanelResizing, setFactsPanelResizing] = useState(false);
+  const [analysisPanelVisible, setAnalysisPanelVisible] = useState(() => readStoredBoolean(ANALYSIS_PANEL_VISIBLE_STORAGE_KEY, true));
+  const [analysisPanelWidth, setAnalysisPanelWidth] = useState(() => readStoredNumber(
+    ANALYSIS_PANEL_WIDTH_STORAGE_KEY,
+    DEFAULT_ANALYSIS_PANEL_WIDTH,
+    MIN_ANALYSIS_PANEL_WIDTH,
+    MAX_ANALYSIS_PANEL_WIDTH,
+  ));
+  const [analysisPanelResizing, setAnalysisPanelResizing] = useState(false);
   const [activeColumnResize, setActiveColumnResize] = useState<{ column: string; startX: number; startWidth: number } | null>(null);
 
-  const hasRoute = Boolean(settings.db_path_1?.trim());
+  const hasRoute = settingsSummary.has_db_path_1;
   const templateOptions = templates;
   const loadHeaders = useMemo(() => loadResult?.headers ?? [], [loadResult]);
   const isDowntimeTemplate = templateKey === DOWNTIME_TEMPLATE_KEY;
@@ -533,6 +584,16 @@ function App() {
     return selectedFactColumns.reduce((total, header) => total + getEffectiveColumnWidth(header), 0);
   }, [columnWidths, factsGeneralSettings.defaultWidth, factsGeneralSettings.minWidth, selectedFactColumns]);
 
+  const displayedFactExportRows = useMemo(
+    () => displayedFactRows.map((row) => Object.fromEntries(
+      selectedFactColumns.map((header) => [
+        header,
+        formatCellValue(row[header], resolvedColumnKinds[header] ?? "string", factsGeneralSettings),
+      ]),
+    )),
+    [displayedFactRows, factsGeneralSettings, resolvedColumnKinds, selectedFactColumns],
+  );
+
   function pushNotice(type: NoticeType, text: string) {
     const id = Date.now() + Math.floor(Math.random() * 1000);
     setNotices((prev) => [...prev, { id, type, text }]);
@@ -541,11 +602,87 @@ function App() {
     }, 4200);
   }
 
+  function updateSettingsSummary(nextSettings: Settings) {
+    setSettingsSummary({
+      has_db_path_1: Boolean(nextSettings.db_path_1.trim()),
+      has_db_path_2: Boolean(nextSettings.db_path_2.trim()),
+    });
+  }
+
+  function clearSettingsAccess() {
+    setSettingsAccessToken("");
+    setSettingsAuthorized(false);
+    setSettings({ db_path_1: "", db_path_2: "" });
+    window.localStorage.removeItem(SETTINGS_TOKEN_STORAGE_KEY);
+  }
+
+  function isUnauthorizedError(error: unknown): error is ApiError {
+    return error instanceof ApiError && error.status === 401;
+  }
+
+  async function loadProtectedSettings(token: string) {
+    const loaded = await getSettings(token);
+    setSettings(loaded);
+    updateSettingsSummary(loaded);
+    setSettingsAuthorized(true);
+    return loaded;
+  }
+
+  async function requestSettingsAccess(): Promise<string | null> {
+    if (settingsAccessToken) {
+      try {
+        await loadProtectedSettings(settingsAccessToken);
+        return settingsAccessToken;
+      } catch (err) {
+        if (!isUnauthorizedError(err)) {
+          throw err;
+        }
+        clearSettingsAccess();
+      }
+    }
+
+    const password = window.prompt("Введите пароль для доступа к вкладке Настройки", "");
+    if (password === null) {
+      return null;
+    }
+
+    const trimmedPassword = password.trim();
+    if (!trimmedPassword) {
+      pushNotice("info", "Пароль не введен.");
+      return null;
+    }
+
+    const auth = await authenticateSettingsAccess(trimmedPassword);
+    setSettingsAccessToken(auth.token);
+    window.localStorage.setItem(SETTINGS_TOKEN_STORAGE_KEY, auth.token);
+    await loadProtectedSettings(auth.token);
+    return auth.token;
+  }
+
+  async function onOpenSettingsTab() {
+    try {
+      setBusy(true);
+      const token = await requestSettingsAccess();
+      if (!token) {
+        setStatus("Открытие настроек отменено.");
+        return;
+      }
+
+      setActiveTab("settings");
+      setStatus("Доступ к настройкам открыт.");
+    } catch (err) {
+      setStatus(`Ошибка доступа к настройкам: ${String(err)}`);
+      pushNotice("error", `Ошибка доступа к настройкам: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     (async () => {
       try {
-        const [s, t] = await Promise.all([getSettings(), getTemplates()]);
-        setSettings(s);
+        const [summary, t] = await Promise.all([getSettingsSummary(), getTemplates()]);
+        setSettingsSummary(summary);
         setTemplates(t);
         if (t.length > 0) {
           setTemplateKey(t[0].key);
@@ -658,6 +795,43 @@ function App() {
   }, [factsPanelResizing]);
 
   useEffect(() => {
+    if (!analysisPanelResizing) {
+      return undefined;
+    }
+
+    const onMouseMove = (event: MouseEvent) => {
+      const bounds = analysisBodyRef.current?.getBoundingClientRect();
+      if (!bounds) {
+        return;
+      }
+
+      const nextWidth = event.clientX - bounds.left;
+      const clamped = Math.max(MIN_ANALYSIS_PANEL_WIDTH, Math.min(MAX_ANALYSIS_PANEL_WIDTH, nextWidth));
+      setAnalysisPanelWidth(clamped);
+    };
+
+    const onMouseUp = () => {
+      setAnalysisPanelResizing(false);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [analysisPanelResizing]);
+
+  useEffect(() => {
+    window.localStorage.setItem(ANALYSIS_PANEL_VISIBLE_STORAGE_KEY, String(analysisPanelVisible));
+  }, [analysisPanelVisible]);
+
+  useEffect(() => {
+    window.localStorage.setItem(ANALYSIS_PANEL_WIDTH_STORAGE_KEY, String(analysisPanelWidth));
+  }, [analysisPanelWidth]);
+
+  useEffect(() => {
     if (!activeColumnResize) {
       return undefined;
     }
@@ -688,14 +862,57 @@ function App() {
     [analysisMode, analysisResult],
   );
 
-  async function onSaveSettings() {
+  async function onSaveFactsView() {
+    // Сохранение теперь разрешено для всех шаблонов, включая "Простои"
+
+    if (!displayedFactExportRows.length) {
+      pushNotice("info", "Нет данных в области Данные для сохранения.");
+      return;
+    }
+
+    const suggestedName = createTimestampedFileName("data");
+    const inputName = window.prompt("Введите имя файла. Расширение .xlsx будет добавлено автоматически.", suggestedName);
+    if (inputName === null) {
+      return;
+    }
+
+    const trimmedName = inputName.trim();
+    if (!trimmedName) {
+      pushNotice("info", "Имя файла не введено.");
+      return;
+    }
+
     try {
       setBusy(true);
-      const saved = await saveSettings(settings);
+      const saved = await exportXlsxToSettings(displayedFactExportRows, trimmedName);
+      setStatus(`Данные сохранены. Файл: ${saved.saved_path}`);
+      pushNotice("success", `Данные сохранены. Файл: ${saved.filename}`);
+    } catch (err) {
+      setStatus(`Ошибка сохранения данных: ${String(err)}`);
+      pushNotice("error", `Ошибка сохранения данных: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSaveSettings() {
+    try {
+      const token = settingsAccessToken || await requestSettingsAccess();
+      if (!token) {
+        setStatus("Сохранение настроек отменено.");
+        return;
+      }
+
+      setBusy(true);
+      const saved = await saveSettings(settings, token);
       setSettings(saved);
+      updateSettingsSummary(saved);
       setStatus("Маршруты сохранены.");
       pushNotice("success", "Маршруты сохранены.");
     } catch (err) {
+      if (isUnauthorizedError(err)) {
+        clearSettingsAccess();
+      }
       setStatus(`Ошибка сохранения: ${String(err)}`);
       pushNotice("error", `Ошибка сохранения: ${String(err)}`);
     } finally {
@@ -1173,7 +1390,7 @@ function App() {
           >
             Инструкции
           </button>
-          <button className={activeTab === "settings" ? "active" : ""} onClick={() => setActiveTab("settings")}>
+          <button className={activeTab === "settings" ? "active" : ""} onClick={() => void onOpenSettingsTab()} disabled={busy}>
             Настройки
           </button>
         </nav>
@@ -1182,7 +1399,20 @@ function App() {
       <main className="workspace">
         {activeTab === "settings" && (
           <section className="panel stack">
-            <h2>Настройки</h2>
+            <div className="settings-header">
+              <h2>Настройки</h2>
+              {settingsAuthorized && (
+                <button
+                  onClick={() => {
+                    clearSettingsAccess();
+                    setActiveTab("facts");
+                    setStatus("Доступ к настройкам закрыт.");
+                  }}
+                >
+                  Закрыть доступ
+                </button>
+              )}
+            </div>
             <label>
               Маршрут БД 1 (папка с файлами для анализа)
               <input
@@ -1252,6 +1482,9 @@ function App() {
               </div>
               <button className="primary" onClick={onUpload} disabled={busy}>
                 {isDowntimeTemplate ? "Загрузить из папки" : "Загрузить"}
+              </button>
+              <button onClick={() => void onSaveFactsView()} disabled={busy || !displayedFactExportRows.length}>
+                Сохранить
               </button>
               <button onClick={() => setFactsPanelVisible((current) => !current)}>
                 {factsPanelVisible ? "Скрыть панель" : "Показать панель"}
@@ -1496,31 +1729,50 @@ function App() {
         )}
 
         {activeTab === "analysis" && (
-          <section className="analysis-layout">
-            <aside className="analysis-left panel">
-              <h3>Анализ</h3>
-              <label className="radio-card">
-                <input
-                  type="radio"
-                  checked={analysisMode === "prepare"}
-                  onChange={() => setAnalysisMode("prepare")}
+          <section className="analysis-layout" ref={analysisBodyRef}>
+            {analysisPanelVisible && (
+              <>
+                <aside className="analysis-left panel" style={{ width: `${analysisPanelWidth}px` }}>
+                  <div className="analysis-panel-header">
+                    <h3>Анализ</h3>
+                    <button onClick={() => setAnalysisPanelVisible(false)}>Скрыть</button>
+                  </div>
+                  <div className="analysis-options">
+                    <label className="radio-card">
+                      <input
+                        type="radio"
+                        checked={analysisMode === "prepare"}
+                        onChange={() => setAnalysisMode("prepare")}
+                      />
+                      Подготовка данных
+                    </label>
+                    <label className="radio-card">
+                      <input
+                        type="radio"
+                        checked={analysisMode === "satisfaction"}
+                        onChange={() => setAnalysisMode("satisfaction")}
+                      />
+                      Удовлетворение
+                    </label>
+                  </div>
+                </aside>
+                <div
+                  className={`analysis-resizer ${analysisPanelResizing ? "active" : ""}`}
+                  onMouseDown={() => setAnalysisPanelResizing(true)}
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Изменить ширину панели анализа"
                 />
-                Подготовка данных
-              </label>
-              <label className="radio-card">
-                <input
-                  type="radio"
-                  checked={analysisMode === "satisfaction"}
-                  onChange={() => setAnalysisMode("satisfaction")}
-                />
-                Удовлетворение
-              </label>
-            </aside>
+              </>
+            )}
 
             <div className="analysis-right panel">
               {!hasRoute && <div className="warning">Маршрут к БД не выбран. Выберите маршрут на вкладке Настройки.</div>}
 
               <div className="toolbar">
+                <button onClick={() => setAnalysisPanelVisible((current) => !current)}>
+                  {analysisPanelVisible ? "Скрыть левую панель" : "Показать левую панель"}
+                </button>
                 <button className="primary" onClick={onProcess} disabled={busy || !hasRoute}>
                   Обработать
                 </button>
@@ -1546,7 +1798,7 @@ function App() {
           <section className="panel instructions">
             <h2>Инструкции</h2>
             <ol>
-              <li>Во вкладке Настройки заполните и сохраните два маршрута.</li>
+              <li>Во вкладке Настройки введите пароль и сохраните два маршрута.</li>
               <li>Во вкладке Загрузка фактов выберите шаблон и загрузите xlsx.</li>
               <li>Ошибки загрузки отобразятся в нижней таблице, загрузка не остановится.</li>
               <li>Во вкладке Анализ нажмите Обработать для получения итоговой таблицы и сводки.</li>

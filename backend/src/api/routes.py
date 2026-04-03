@@ -1,13 +1,20 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import secrets
 import shutil
 import tempfile
+from typing import Annotated
 
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, Depends, File, Header, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 
+from src.core.config import SETTINGS_ACCESS_PASSWORD, SETTINGS_ACCESS_TOKEN_TTL_SECONDS
 from src.core.state import state
 from src.models.schemas import (
+    SettingsAuthPayload,
+    SettingsAuthResponse,
     SettingsPayload,
+    SettingsSummaryResponse,
     ColumnConfigPayload,
     ColumnConfigResponse,
     ColumnTypeConfigPayload,
@@ -38,18 +45,59 @@ from src.services.export_service import export_rows, export_rows_to_xlsx_in_dire
 router = APIRouter(prefix="/api")
 
 
+def _cleanup_expired_settings_tokens() -> None:
+    now = datetime.now(timezone.utc)
+    expired_tokens = [token for token, expires_at in state.settings_tokens.items() if expires_at <= now]
+    for token in expired_tokens:
+        state.settings_tokens.pop(token, None)
+
+
+def _require_settings_access(settings_token: Annotated[str | None, Header(alias="X-Settings-Token")] = None) -> str:
+    _cleanup_expired_settings_tokens()
+    token = (settings_token or "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Требуется пароль для доступа к настройкам")
+
+    expires_at = state.settings_tokens.get(token)
+    if expires_at is None or expires_at <= datetime.now(timezone.utc):
+        state.settings_tokens.pop(token, None)
+        raise HTTPException(status_code=401, detail="Доступ к настройкам истек. Введите пароль повторно")
+
+    return token
+
+
 @router.get("/health")
 def health():
     return {"status": "ok"}
 
 
+@router.get("/settings/summary", response_model=SettingsSummaryResponse)
+def get_settings_summary():
+    settings = load_settings()
+    return SettingsSummaryResponse(
+        has_db_path_1=bool((settings.get("db_path_1") or "").strip()),
+        has_db_path_2=bool((settings.get("db_path_2") or "").strip()),
+    )
+
+
+@router.post("/settings/auth", response_model=SettingsAuthResponse)
+def authenticate_settings_access(payload: SettingsAuthPayload):
+    if payload.password != SETTINGS_ACCESS_PASSWORD:
+        raise HTTPException(status_code=401, detail="Неверный пароль")
+
+    _cleanup_expired_settings_tokens()
+    token = secrets.token_urlsafe(32)
+    state.settings_tokens[token] = datetime.now(timezone.utc) + timedelta(seconds=SETTINGS_ACCESS_TOKEN_TTL_SECONDS)
+    return SettingsAuthResponse(token=token, expires_in_seconds=SETTINGS_ACCESS_TOKEN_TTL_SECONDS)
+
+
 @router.get("/settings")
-def get_settings():
+def get_settings(_: str = Depends(_require_settings_access)):
     return load_settings()
 
 
 @router.post("/settings")
-def post_settings(payload: SettingsPayload):
+def post_settings(payload: SettingsPayload, _: str = Depends(_require_settings_access)):
     return save_settings(payload.model_dump())
 
 
@@ -157,6 +205,12 @@ def _find_newest_downtime_file(directory: str | Path) -> Path:
     if not path.exists() or not path.is_dir():
         raise HTTPException(status_code=400, detail="Маршрут БД 1 не найден или не является папкой")
 
+    extension_priority = {
+        ".xlsx": 2,
+        ".xlsm": 1,
+        ".xls": 0,
+    }
+
     candidates = [
         candidate
         for candidate in path.iterdir()
@@ -167,7 +221,13 @@ def _find_newest_downtime_file(directory: str | Path) -> Path:
     if not candidates:
         raise HTTPException(status_code=404, detail="В Маршрут БД 1 не найден файл prostoy*")
 
-    return max(candidates, key=lambda candidate: candidate.stat().st_mtime)
+    return max(
+        candidates,
+        key=lambda candidate: (
+            extension_priority.get(candidate.suffix.lower(), -1),
+            candidate.stat().st_mtime,
+        ),
+    )
 
 
 @router.post("/facts/load-downtime", response_model=LoadResponse)
@@ -240,7 +300,7 @@ def export_xlsx_to_settings(payload: ExportPayload):
         raise HTTPException(status_code=400, detail="Маршрут БД 2 не задан в настройках")
 
     try:
-        out_file = export_rows_to_xlsx_in_directory(payload.rows, target_dir)
+        out_file = export_rows_to_xlsx_in_directory(payload.rows, target_dir, payload.filename)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
