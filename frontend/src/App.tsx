@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FocusEvent as ReactFocusEvent, type MouseEvent as ReactMouseEvent } from "react";
 import "./App.css";
 import {
   ApiError,
   authenticateSettingsAccess,
   getColumnTypeConfig,
-  exportRows,
   exportXlsxToSettings,
   getColumnConfig,
   getFilterConfig,
@@ -12,13 +11,12 @@ import {
   getSettingsSummary,
   getTemplates,
   loadDowntimeFacts,
-  runAnalysis,
   saveColumnConfig,
   saveFilterConfig,
   saveColumnTypeConfig,
   saveSettings,
+  uploadAnalysisSource,
   uploadFacts,
-  type AnalysisResponse,
   type ColumnConfig,
   type ColumnTypeConfig,
   type FilterConfig,
@@ -49,6 +47,21 @@ type FactsGeneralSettings = {
   rowLimit: number;
   hideMoneyCents: boolean;
 };
+type AnalysisChartType = "pie" | "bar";
+type AnalysisAggregation = "count" | "sum";
+type AnalysisChartDraft = {
+  type: AnalysisChartType;
+  pieCategoryColumn: string;
+  pieValueColumn: string;
+  pieAggregation: AnalysisAggregation;
+  pieTitle: string;
+  pieShowLabels: boolean;
+  pieTopCount: number;
+  barCategoryColumn: string;
+  barValueColumn: string;
+  barAggregation: AnalysisAggregation;
+  barTitle: string;
+};
 type ColumnMoveAnimation = {
   column: string;
   direction: -1 | 1;
@@ -62,6 +75,9 @@ const MAX_FACTS_PANEL_WIDTH = 520;
 const DEFAULT_ANALYSIS_PANEL_WIDTH = 220;
 const MIN_ANALYSIS_PANEL_WIDTH = 160;
 const MAX_ANALYSIS_PANEL_WIDTH = 360;
+const DEFAULT_ANALYSIS_CENTER_WIDTH = 520;
+const MIN_ANALYSIS_CENTER_WIDTH = 340;
+const MAX_ANALYSIS_CENTER_WIDTH = 820;
 const DEFAULT_COLUMN_WIDTH = 180;
 const MIN_COLUMN_WIDTH = 60;
 const SETTINGS_TOKEN_STORAGE_KEY = "analiz.settingsAccessToken";
@@ -70,6 +86,135 @@ const ANALYSIS_PANEL_WIDTH_STORAGE_KEY = "analiz.analysisPanelWidth";
 const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "analiz.columnWidths";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
 const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
+  {
+    id: "2026-04-03T16:42:00",
+    title: "03.04.2026 16:42:00",
+    text: [
+      "Экран 'Анализ' переведен в почти полноширинный режим.",
+      "- Для рабочей области анализа дополнительно убраны верхний, правый и нижний внешние отступы.",
+      "- Режим сделан локально только для вкладки 'Анализ' и не влияет на другие разделы.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T16:36:00",
+    title: "03.04.2026 16:36:00",
+    text: [
+      "Сдвинута рабочая область вкладки 'Анализ' ближе к левому краю.",
+      "- Для экрана анализа уменьшен только левый внутренний отступ рабочей области.",
+      "- Остальные вкладки сохранены без изменений по внешним отступам.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T16:24:00",
+    title: "03.04.2026 16:24:00",
+    text: [
+      "Сокращен зазор между левой панелью анализа и остальной частью экрана.",
+      "- Убран общий промежуток между левой панелью и правым блоком анализа.",
+      "- Разделитель изменения ширины сужен до минимально достаточного размера.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T16:15:00",
+    title: "03.04.2026 16:15:00",
+    text: [
+      "Локально уплотнены панели вкладки 'Анализ'.",
+      "- Для panel-блоков экрана анализа уменьшены внутренние отступы без изменения глобального класса .panel.",
+      "- Остальные вкладки приложения сохранены без визуальных изменений.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T16:08:00",
+    title: "03.04.2026 16:08:00",
+    text: [
+      "Уплотнены внешние отступы и верхняя панель вкладки 'Анализ'.",
+      "- Уменьшены расстояния между панелями и рабочей областью экрана.",
+      "- Сокращены промежутки между левой, верхней, центральной и правой панелями.",
+      "- Кнопки в верхней панели анализа сделаны компактнее по внутренним отступам.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T15:59:00",
+    title: "03.04.2026 15:59:00",
+    text: [
+      "Дополнительно уплотнена центральная панель вкладки 'Анализ'.",
+      "- Убран tooltip с названий полей управления графиком.",
+      "- Удалён пустой верхний контейнер центральной панели.",
+      "- Сокращены интервалы в легенде, строках диаграммы и правой панели данных.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T15:48:00",
+    title: "03.04.2026 15:48:00",
+    text: [
+      "Добавлены кастомные подсказки и уплотнена центральная панель вкладки 'Анализ'.",
+      "- Для подписей и самих полей управления графиком включены собственные tooltip-подсказки.",
+      "- Tooltip теперь показывает полное название поля и текущее значение элемента управления.",
+      "- Сокращены вертикальные и горизонтальные промежутки между элементами центральной панели.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T15:31:00",
+    title: "03.04.2026 15:31:00",
+    text: [
+      "Стабилизирована центральная панель вкладки 'Анализ'.",
+      "- Верхняя панель теперь показывает упрощенную текстовую строку с файлом и количеством строк.",
+      "- Блок параметров графика переведен в фиксированную трехколоночную сетку с собственным горизонтальным скроллом.",
+      "- Устранено наложение подписей на поля при сужении центральной панели.",
+      "- Кнопка 'Построить' дополнительно расширена.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T15:14:00",
+    title: "03.04.2026 15:14:00",
+    text: [
+      "Уточнены названия и поведение элементов на вкладке 'Анализ'.",
+      "- Пункты левой панели переименованы в 'Простой' и 'Клиент'.",
+      "- Для обрезаемых надписей добаван показ полного текста при наведении.",
+      "- Чекбокс 'Показывать подписи' переименован в 'Подписи'.",
+      "- Кнопка показа левой панели перенесена в analysis-topbar.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T15:02:00",
+    title: "03.04.2026 15:02:00",
+    text: [
+      "Уточнена компоновка элементов на вкладке 'Анализ'.",
+      "- Ширина полей управления графиком увеличена до 90 px.",
+      "- Элементы управления в центральной панели теперь выводятся по 3 в ряд с более плотными вертикальными отступами.",
+      "- Кнопка 'Построить' расширена до 75 px.",
+      "- Радиокнопки в левой панели выровнены в классическом виде: кружок слева, подпись справа.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T14:49:00",
+    title: "03.04.2026 14:49:00",
+    text: [
+      "Уточнено расположение элементов управления на вкладке 'Анализ'.",
+      "- Кнопка 'Скрыть' перенесена из левой панели в верхнюю панель управления.",
+      "- Для подписей полей управления графиком задана фиксированная ширина.",
+      "- Поля ввода и выпадающие списки придвинуты ближе к своим подписям.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T14:41:00",
+    title: "03.04.2026 14:41:00",
+    text: [
+      "Обновлена верхняя панель вкладки 'Анализ' и компактность элементов управления графиком.",
+      "- Кнопки 'Загрузить данные' и 'Обработать' перенесены в analysis-topbar.",
+      "- Поля 'Тип', 'Категория', 'Агрегация', 'Заголовок' и 'Топ категорий' получили фиксированную ширину и подписи слева.",
+      "- Кнопка 'Построить' стала компактной фиксированной ширины.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T14:26:00",
+    title: "03.04.2026 14:26:00",
+    text: [
+      "Перестроен layout вкладки 'Анализ'.",
+      "- Левая панель анализа теперь тянется на всю высоту рабочей области.",
+      "- Верхняя панель анализа перенесена в правую часть и теперь занимает всю ширину над центральной и правой панелями.",
+      "- Центральная и правая панели расположены под верхней панелью справа от левого блока.",
+    ].join("\n"),
+  },
   {
     id: "2026-04-03T14:02:00",
     title: "03.04.2026 14:02:00",
@@ -173,6 +318,44 @@ const DEFAULT_FACTS_GENERAL_SETTINGS: FactsGeneralSettings = {
   rowLimit: 10,
   hideMoneyCents: false,
 };
+const DEFAULT_ANALYSIS_CHART_DRAFT: AnalysisChartDraft = {
+  type: "pie",
+  pieCategoryColumn: "",
+  pieValueColumn: "",
+  pieAggregation: "count",
+  pieTitle: "Круговая диаграмма",
+  pieShowLabels: true,
+  pieTopCount: 8,
+  barCategoryColumn: "",
+  barValueColumn: "",
+  barAggregation: "count",
+  barTitle: "Столбиковая диаграмма",
+};
+const ANALYSIS_CHART_COLORS = [
+  "#2d6cdf",
+  "#e77d35",
+  "#24936e",
+  "#b9465a",
+  "#6c5ce7",
+  "#b88a14",
+  "#15808a",
+  "#6f7f2b",
+  "#c457b5",
+  "#5478a6",
+];
+
+function getAnalysisChartTypeLabel(type: AnalysisChartType): string {
+  return type === "pie" ? "Пирог" : "Столбиковая";
+}
+
+function getAnalysisAggregationLabel(aggregation: AnalysisAggregation): string {
+  return aggregation === "sum" ? "Сумма по столбцу" : "Количество строк";
+}
+
+function getTooltipValue(value: string | number | undefined | null, emptyLabel = "не выбрано"): string {
+  const normalized = String(value ?? "").trim();
+  return normalized || emptyLabel;
+}
 
 function orderColumnsByHeaders(headers: string[], columns: string[]): string[] {
   const allowedHeaders = new Set(headers);
@@ -521,37 +704,70 @@ function formatCellValue(
   return String(value ?? "");
 }
 
-function hiddenColumnsByMode(mode: AnalysisMode): Set<string> {
-  if (mode === "satisfaction") {
-    return new Set([
-      "оценка_клиента_от_1_до-5",
-      "причина_провала",
-      "причина_провала_(СВ)",
-    ]);
-  }
-  return new Set([
-    "Удовлетворенность клиента",
-    "Удовлетворенность_клиента_(текст)",
-    "оценка_клиента_от_1_до-5",
-  ]);
+function cloneAnalysisChartDraft(draft: AnalysisChartDraft): AnalysisChartDraft {
+  return { ...draft };
 }
 
-function sanitizeAnalysisRows(rows: Record<string, unknown>[], mode: AnalysisMode): Record<string, unknown>[] {
-  const hidden = hiddenColumnsByMode(mode);
-  return rows.map((row) => {
-    const out: Record<string, unknown> = {};
-    Object.entries(row).forEach(([k, v]) => {
-      if (!hidden.has(k)) {
-        out[k] = v;
-      }
-    });
-    return out;
+function aggregateChartRows(
+  rows: Record<string, unknown>[],
+  categoryColumn: string,
+  aggregation: AnalysisAggregation,
+  valueColumn: string,
+): Array<{ label: string; value: number }> {
+  const grouped = new Map<string, number>();
+
+  rows.forEach((row) => {
+    const label = String(row[categoryColumn] ?? "").trim() || "(Пусто)";
+    const currentValue = grouped.get(label) ?? 0;
+
+    if (aggregation === "count") {
+      grouped.set(label, currentValue + 1);
+      return;
+    }
+
+    const numericValue = parseNumberValue(row[valueColumn]);
+    if (numericValue === null) {
+      return;
+    }
+    grouped.set(label, currentValue + numericValue);
   });
+
+  return [...grouped.entries()]
+    .map(([label, value]) => ({ label, value }))
+    .filter((entry) => Number.isFinite(entry.value) && entry.value > 0)
+    .sort((left, right) => right.value - left.value);
+}
+
+function clampValue(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function polarToCartesian(centerX: number, centerY: number, radius: number, angleInDegrees: number) {
+  const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
+  return {
+    x: centerX + radius * Math.cos(angleInRadians),
+    y: centerY + radius * Math.sin(angleInRadians),
+  };
+}
+
+function describePieArc(centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number): string {
+  const start = polarToCartesian(centerX, centerY, radius, endAngle);
+  const end = polarToCartesian(centerX, centerY, radius, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+
+  return [
+    `M ${centerX} ${centerY}`,
+    `L ${start.x} ${start.y}`,
+    `A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`,
+    "Z",
+  ].join(" ");
 }
 
 function App() {
   const factsBodyRef = useRef<HTMLDivElement | null>(null);
   const analysisBodyRef = useRef<HTMLDivElement | null>(null);
+  const analysisWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const analysisFileInputRef = useRef<HTMLInputElement | null>(null);
   const dataTableBottomScrollRef = useRef<HTMLDivElement | null>(null);
   const dataTableTopScrollRef = useRef<HTMLDivElement | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("facts");
@@ -565,12 +781,16 @@ function App() {
 
   const [loadResult, setLoadResult] = useState<LoadResponse | null>(null);
   const [lastParseSnapshot, setLastParseSnapshot] = useState<LoadResponse | null>(null);
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("prepare");
+  const [analysisLoadResult, setAnalysisLoadResult] = useState<LoadResponse | null>(null);
+  const [analysisSourceFile, setAnalysisSourceFile] = useState<File | null>(null);
+  const [analysisChartDraft, setAnalysisChartDraft] = useState<AnalysisChartDraft>(DEFAULT_ANALYSIS_CHART_DRAFT);
+  const [analysisChartApplied, setAnalysisChartApplied] = useState<AnalysisChartDraft | null>(null);
 
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [notices, setNotices] = useState<Notice[]>([]);
+  const [analysisTooltip, setAnalysisTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   const [journalEntries] = useState<JournalEntry[]>(() => {
     try {
       const raw = window.localStorage.getItem(JOURNAL_STORAGE_KEY);
@@ -759,6 +979,8 @@ function App() {
     MAX_ANALYSIS_PANEL_WIDTH,
   ));
   const [analysisPanelResizing, setAnalysisPanelResizing] = useState(false);
+  const [analysisCenterWidth, setAnalysisCenterWidth] = useState(DEFAULT_ANALYSIS_CENTER_WIDTH);
+  const [analysisCenterResizing, setAnalysisCenterResizing] = useState(false);
   const [activeColumnResize, setActiveColumnResize] = useState<{ column: string; startX: number; startWidth: number } | null>(null);
   const [columnMoveAnimation, setColumnMoveAnimation] = useState<ColumnMoveAnimation | null>(null);
 
@@ -965,6 +1187,32 @@ function App() {
     window.setTimeout(() => {
       setNotices((prev) => prev.filter((n) => n.id !== id));
     }, 4200);
+  }
+
+  function showAnalysisTooltip(text: string, target: HTMLElement) {
+    const normalized = text.trim();
+    if (!normalized) {
+      return;
+    }
+    const bounds = target.getBoundingClientRect();
+    setAnalysisTooltip({
+      text: normalized,
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top - 8,
+    });
+  }
+
+  function hideAnalysisTooltip() {
+    setAnalysisTooltip(null);
+  }
+
+  function getAnalysisTooltipProps(text: string) {
+    return {
+      onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => showAnalysisTooltip(text, event.currentTarget),
+      onMouseLeave: hideAnalysisTooltip,
+      onFocus: (event: ReactFocusEvent<HTMLElement>) => showAnalysisTooltip(text, event.currentTarget),
+      onBlur: hideAnalysisTooltip,
+    };
   }
 
   function updateSettingsSummary(nextSettings: Settings) {
@@ -1247,6 +1495,38 @@ function App() {
   }, [analysisPanelResizing]);
 
   useEffect(() => {
+    if (!analysisCenterResizing) {
+      return undefined;
+    }
+
+    const onMouseMove = (event: MouseEvent) => {
+      const bounds = analysisWorkspaceRef.current?.getBoundingClientRect();
+      if (!bounds) {
+        return;
+      }
+
+      const nextWidth = clampValue(
+        event.clientX - bounds.left,
+        MIN_ANALYSIS_CENTER_WIDTH,
+        MAX_ANALYSIS_CENTER_WIDTH,
+      );
+      setAnalysisCenterWidth(nextWidth);
+    };
+
+    const onMouseUp = () => {
+      setAnalysisCenterResizing(false);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [analysisCenterResizing]);
+
+  useEffect(() => {
     window.localStorage.setItem(ANALYSIS_PANEL_VISIBLE_STORAGE_KEY, String(analysisPanelVisible));
   }, [analysisPanelVisible]);
 
@@ -1294,10 +1574,62 @@ function App() {
     };
   }, [columnMoveAnimation]);
 
-  const visibleRows = useMemo(
-    () => sanitizeAnalysisRows(analysisResult?.rows ?? [], analysisMode),
-    [analysisMode, analysisResult],
-  );
+  const analysisHeaders = useMemo(() => analysisLoadResult?.headers ?? [], [analysisLoadResult]);
+  const analysisRows = useMemo(() => analysisLoadResult?.rows ?? [], [analysisLoadResult]);
+  const appliedChartRows = useMemo(() => {
+    if (!analysisChartApplied || !analysisRows.length) {
+      return [];
+    }
+
+    if (analysisChartApplied.type === "pie") {
+      const grouped = aggregateChartRows(
+        analysisRows,
+        analysisChartApplied.pieCategoryColumn,
+        analysisChartApplied.pieAggregation,
+        analysisChartApplied.pieValueColumn,
+      );
+      const limitedRows = grouped.slice(0, Math.max(1, analysisChartApplied.pieTopCount));
+      const restValue = grouped.slice(limitedRows.length).reduce((sum, entry) => sum + entry.value, 0);
+      return restValue > 0 ? [...limitedRows, { label: "Прочее", value: restValue }] : limitedRows;
+    }
+
+    return aggregateChartRows(
+      analysisRows,
+      analysisChartApplied.barCategoryColumn,
+      analysisChartApplied.barAggregation,
+      analysisChartApplied.barValueColumn,
+    ).slice(0, 12);
+  }, [analysisChartApplied, analysisRows]);
+
+  useEffect(() => {
+    if (!analysisHeaders.length) {
+      setAnalysisChartDraft(DEFAULT_ANALYSIS_CHART_DRAFT);
+      setAnalysisChartApplied(null);
+      return;
+    }
+
+    const firstHeader = analysisHeaders[0] ?? "";
+    const numericHeader = analysisHeaders.find((header) => {
+      return analysisRows.some((row) => parseNumberValue(row[header]) !== null);
+    }) ?? "";
+
+    setAnalysisChartDraft((current) => ({
+      ...current,
+      pieCategoryColumn: current.pieCategoryColumn && analysisHeaders.includes(current.pieCategoryColumn)
+        ? current.pieCategoryColumn
+        : firstHeader,
+      pieValueColumn: current.pieValueColumn && analysisHeaders.includes(current.pieValueColumn)
+        ? current.pieValueColumn
+        : numericHeader,
+      barCategoryColumn: current.barCategoryColumn && analysisHeaders.includes(current.barCategoryColumn)
+        ? current.barCategoryColumn
+        : firstHeader,
+      barValueColumn: current.barValueColumn && analysisHeaders.includes(current.barValueColumn)
+        ? current.barValueColumn
+        : numericHeader,
+    }));
+    setAnalysisChartApplied(null);
+  }, [analysisHeaders, analysisRows]);
 
   async function onSaveFactsView() {
     // Сохранение теперь разрешено для всех шаблонов, включая "Простои"
@@ -1391,7 +1723,6 @@ function App() {
         const res = await loadDowntimeFacts();
         setLoadResult(res);
         setLastParseSnapshot(null);
-        setAnalysisResult(null);
         setStatus(`Загрузка простоя завершена. Источник: ${res.source_file}. Строк: ${res.total_rows}.`);
         pushNotice("success", "Файл простоя загружен автоматически.");
       } catch (err) {
@@ -1417,7 +1748,6 @@ function App() {
       const res = await uploadFacts(effectiveTemplateKey, file);
       setLoadResult(res);
       setLastParseSnapshot(null);
-      setAnalysisResult(null);
       setStatus(
         `Загрузка завершена. Всего: ${res.total_rows}, валидных: ${res.valid_count}, ошибок: ${res.error_count}.`,
       );
@@ -1658,42 +1988,78 @@ function App() {
     }
   }
 
-  async function onProcess() {
-    if (!hasRoute) {
-      setStatus("Маршрут к БД не выбран. Укажите путь во вкладке Настройки.");
-      pushNotice("error", "Маршрут к БД не выбран. Укажите путь во вкладке Настройки.");
+  async function onAnalysisSourceFileChange(fileToUpload: File | null) {
+    setAnalysisSourceFile(fileToUpload);
+    setAnalysisChartApplied(null);
+
+    if (!fileToUpload) {
+      setAnalysisLoadResult(null);
+      setStatus("Файл анализа очищен.");
       return;
     }
 
     try {
       setBusy(true);
-      const res = await runAnalysis(analysisMode);
-      setAnalysisResult(res);
-      setStatus(`Обработка завершена. Статус: ${res.status}.`);
-      pushNotice("success", `Обработка завершена. Статус: ${res.status}.`);
+      const result = await uploadAnalysisSource(fileToUpload);
+      setAnalysisLoadResult(result);
+      setStatus(`Файл анализа загружен. Строк: ${result.total_rows}.`);
+      pushNotice("success", `Файл анализа '${fileToUpload.name}' загружен.`);
     } catch (err) {
-      setStatus(`Ошибка обработки: ${String(err)}`);
-      pushNotice("error", `Ошибка обработки: ${String(err)}`);
+      setAnalysisLoadResult(null);
+      setStatus(`Ошибка загрузки файла анализа: ${String(err)}`);
+      pushNotice("error", `Ошибка загрузки файла анализа: ${String(err)}`);
     } finally {
       setBusy(false);
     }
   }
 
-  async function onExport(format: "xlsx" | "csv") {
-    try {
-      if (format === "xlsx") {
-        const saved = await exportXlsxToSettings(visibleRows);
-        setStatus(`Экспорт XLSX выполнен. Файл сохранен: ${saved.saved_path}`);
-        pushNotice("success", `Экспорт XLSX выполнен. Файл: ${saved.filename}`);
-      } else {
-        await exportRows(visibleRows, format);
-        setStatus(`Экспорт ${format.toUpperCase()} выполнен.`);
-        pushNotice("success", `Экспорт ${format.toUpperCase()} выполнен.`);
-      }
-    } catch (err) {
-      setStatus(`Ошибка экспорта: ${String(err)}`);
-      pushNotice("error", `Ошибка экспорта: ${String(err)}`);
+  function onProcess() {
+    if (!analysisRows.length) {
+      setStatus("Сначала загрузите данные для анализа.");
+      pushNotice("info", "Сначала загрузите данные для анализа.");
+      return;
     }
+
+    setStatus("Отдельная обработка для вкладки 'Анализ' пока не реализована.");
+    pushNotice("info", "Отдельная обработка для вкладки 'Анализ' пока не реализована.");
+  }
+
+  function onBuildAnalysisChart() {
+    if (!analysisRows.length) {
+      setStatus("Нет данных для построения графика.");
+      pushNotice("info", "Нет данных для построения графика.");
+      return;
+    }
+
+    if (analysisChartDraft.type === "pie") {
+      if (!analysisChartDraft.pieCategoryColumn) {
+        setStatus("Выберите столбец категории для круговой диаграммы.");
+        pushNotice("info", "Выберите столбец категории для круговой диаграммы.");
+        return;
+      }
+      if (analysisChartDraft.pieAggregation === "sum" && !analysisChartDraft.pieValueColumn) {
+        setStatus("Выберите числовой столбец для суммы на круговой диаграмме.");
+        pushNotice("info", "Выберите числовой столбец для суммы на круговой диаграмме.");
+        return;
+      }
+    }
+
+    if (analysisChartDraft.type === "bar") {
+      if (!analysisChartDraft.barCategoryColumn) {
+        setStatus("Выберите столбец категории для столбиковой диаграммы.");
+        pushNotice("info", "Выберите столбец категории для столбиковой диаграммы.");
+        return;
+      }
+      if (analysisChartDraft.barAggregation === "sum" && !analysisChartDraft.barValueColumn) {
+        setStatus("Выберите числовой столбец для суммы на столбиковой диаграмме.");
+        pushNotice("info", "Выберите числовой столбец для суммы на столбиковой диаграмме.");
+        return;
+      }
+    }
+
+    setAnalysisChartApplied(cloneAnalysisChartDraft(analysisChartDraft));
+    setStatus("График построен.");
+    pushNotice("success", "График построен.");
   }
 
   function renderTable(rows: Record<string, unknown>[], columns?: string[]) {
@@ -1885,8 +2251,106 @@ function App() {
     );
   }
 
+  function renderAnalysisChart() {
+    if (!analysisRows.length) {
+      return <div className="empty">Загрузите файл, чтобы построить график</div>;
+    }
+
+    if (!analysisChartApplied) {
+      return <div className="empty">Настройте параметры и нажмите 'Построить'</div>;
+    }
+
+    if (!appliedChartRows.length) {
+      return <div className="empty">По выбранным параметрам нет данных для визуализации</div>;
+    }
+
+    if (analysisChartApplied.type === "pie") {
+      const total = appliedChartRows.reduce((sum, item) => sum + item.value, 0);
+      let startAngle = 0;
+
+      return (
+        <div className="analysis-chart-card">
+          <div className="analysis-chart-title">{analysisChartApplied.pieTitle || "Круговая диаграмма"}</div>
+          <div className="analysis-chart-layout">
+            <svg viewBox="0 0 320 320" className="analysis-chart-svg" aria-label="Круговая диаграмма">
+              {appliedChartRows.map((item, index) => {
+                const sliceAngle = total === 0 ? 0 : (item.value / total) * 360;
+                const endAngle = startAngle + sliceAngle;
+                const path = describePieArc(160, 160, 110, startAngle, endAngle);
+                const midAngle = startAngle + sliceAngle / 2;
+                const labelPoint = polarToCartesian(160, 160, 74, midAngle);
+                const percent = total === 0 ? 0 : Math.round((item.value / total) * 100);
+                const slice = (
+                  <g key={item.label}>
+                    <path d={path} fill={ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length]} />
+                    {analysisChartApplied.pieShowLabels && percent >= 4 && (
+                      <text x={labelPoint.x} y={labelPoint.y} textAnchor="middle" className="analysis-chart-slice-label">
+                        {percent}%
+                      </text>
+                    )}
+                  </g>
+                );
+                startAngle = endAngle;
+                return slice;
+              })}
+            </svg>
+            <div className="analysis-chart-legend">
+              {appliedChartRows.map((item, index) => {
+                const percent = total === 0 ? 0 : Math.round((item.value / total) * 100);
+                return (
+                  <div key={item.label} className="analysis-chart-legend-item">
+                    <span className="analysis-chart-legend-color" style={{ backgroundColor: ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length] }} />
+                    <span className="analysis-chart-legend-text">{item.label}</span>
+                    <span className="analysis-chart-legend-value">{item.value.toLocaleString("ru-RU")} ({percent}%)</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const maxValue = Math.max(...appliedChartRows.map((item) => item.value), 1);
+
+    return (
+      <div className="analysis-chart-card">
+        <div className="analysis-chart-title">{analysisChartApplied.barTitle || "Столбиковая диаграмма"}</div>
+        <div className="analysis-bar-chart">
+          {appliedChartRows.map((item, index) => {
+            const widthPercent = maxValue === 0 ? 0 : (item.value / maxValue) * 100;
+            return (
+              <div key={item.label} className="analysis-bar-row">
+                <div className="analysis-bar-label" title={item.label}>{item.label}</div>
+                <div className="analysis-bar-track">
+                  <div
+                    className="analysis-bar-fill"
+                    style={{
+                      width: `${clampValue(widthPercent, 0, 100)}%`,
+                      backgroundColor: ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length],
+                    }}
+                  />
+                </div>
+                <div className="analysis-bar-value">{item.value.toLocaleString("ru-RU")}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
+      {analysisTooltip && (
+        <div
+          className="analysis-floating-tooltip"
+          style={{ left: `${analysisTooltip.x}px`, top: `${analysisTooltip.y}px` }}
+          role="tooltip"
+        >
+          {analysisTooltip.text}
+        </div>
+      )}
       <div className="toast-stack" aria-live="polite" aria-atomic="true">
         {notices.map((n) => (
           <div key={n.id} className={`toast ${n.type}`}>
@@ -1919,7 +2383,7 @@ function App() {
         </nav>
       </header>
 
-      <main className="workspace">
+      <main className={`workspace${activeTab === "analysis" ? " workspace-analysis" : ""}`}>
         {activeTab === "settings" && (
           <section className="panel stack">
             <div className="settings-header">
@@ -2348,24 +2812,26 @@ function App() {
                 <aside className="analysis-left panel" style={{ width: `${analysisPanelWidth}px` }}>
                   <div className="analysis-panel-header">
                     <h3>Анализ</h3>
-                    <button onClick={() => setAnalysisPanelVisible(false)}>Скрыть</button>
+                  </div>
+                  <div className="analysis-source-hint">
+                    {analysisSourceFile?.name || analysisLoadResult?.source_file || "Файл не выбран"}
                   </div>
                   <div className="analysis-options">
-                    <label className="radio-card">
+                    <label className="radio-card" title="Простой">
                       <input
                         type="radio"
                         checked={analysisMode === "prepare"}
                         onChange={() => setAnalysisMode("prepare")}
                       />
-                      Подготовка данных
+                      <span className="truncate-text">Простой</span>
                     </label>
-                    <label className="radio-card">
+                    <label className="radio-card" title="Клиент">
                       <input
                         type="radio"
                         checked={analysisMode === "satisfaction"}
                         onChange={() => setAnalysisMode("satisfaction")}
                       />
-                      Удовлетворение
+                      <span className="truncate-text">Клиент</span>
                     </label>
                   </div>
                 </aside>
@@ -2379,30 +2845,248 @@ function App() {
               </>
             )}
 
-            <div className="analysis-right panel">
-              {!hasRoute && <div className="warning">Маршрут к БД не выбран. Выберите маршрут на вкладке Настройки.</div>}
-
-              <div className="toolbar">
-                <button onClick={() => setAnalysisPanelVisible((current) => !current)}>
-                  {analysisPanelVisible ? "Скрыть левую панель" : "Показать левую панель"}
-                </button>
-                <button className="primary" onClick={onProcess} disabled={busy || !hasRoute}>
-                  Обработать
-                </button>
-                <button onClick={() => onExport("xlsx")} disabled={!visibleRows.length}>
-                  Экспорт xlsx
-                </button>
-                <button onClick={() => onExport("csv")} disabled={!visibleRows.length}>
-                  Экспорт csv
-                </button>
+            <div className="analysis-content">
+              <div className="analysis-topbar panel">
+                <div className="analysis-topbar-heading">
+                  <span className="analysis-topbar-title">Панель управления анализом</span>
+                  {!analysisPanelVisible && (
+                    <button onClick={() => setAnalysisPanelVisible(true)}>Показать левую панель</button>
+                  )}
+                  {analysisPanelVisible && (
+                    <button onClick={() => setAnalysisPanelVisible(false)}>Скрыть</button>
+                  )}
+                </div>
+                <div className="analysis-topbar-meta" title={`Файл: ${analysisLoadResult?.source_file || "не загружен"} | Строк: ${analysisLoadResult?.total_rows ?? 0}`}>
+                  Файл: {analysisLoadResult?.source_file || "не загружен"} | Строк: {analysisLoadResult?.total_rows ?? 0}
+                </div>
+                <div className="analysis-topbar-actions">
+                  <input
+                    ref={analysisFileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.xlsm"
+                    className="analysis-hidden-input"
+                    onChange={(event) => void onAnalysisSourceFileChange(event.target.files?.[0] ?? null)}
+                  />
+                  <button className="primary" onClick={() => analysisFileInputRef.current?.click()} disabled={busy}>
+                    Загрузить
+                  </button>
+                  <button onClick={onProcess} disabled={busy || !analysisRows.length}>
+                    Обработать
+                  </button>
+                </div>
               </div>
 
-              <div className="summary">
-                Всего: {analysisResult?.total ?? 0} | Валидных: {analysisResult?.valid ?? 0} | Ошибок: {analysisResult?.errors ?? 0} |
-                Статус: {analysisResult?.status ?? "Нет данных"}
-              </div>
+              <div className="analysis-workspace" ref={analysisWorkspaceRef}>
+                <div className="analysis-center panel" style={{ width: `${analysisCenterWidth}px` }}>
+                <div className="analysis-controls-scroll">
+                <div className="analysis-chart-controls">
+                  <label className="analysis-control-row">
+                    <span className="analysis-control-label">Тип</span>
+                    <select
+                      {...getAnalysisTooltipProps(`Тип: ${getAnalysisChartTypeLabel(analysisChartDraft.type)}`)}
+                      value={analysisChartDraft.type}
+                      onChange={(event) => setAnalysisChartDraft((current) => ({
+                        ...current,
+                        type: event.target.value as AnalysisChartType,
+                      }))}
+                    >
+                      <option value="pie">Пирог</option>
+                      <option value="bar">Столбиковая</option>
+                    </select>
+                  </label>
 
-              {renderTable(visibleRows)}
+                  {analysisChartDraft.type === "pie" && (
+                    <>
+                      <label className="analysis-control-row">
+                        <span className="analysis-control-label">Категория</span>
+                        <select
+                          {...getAnalysisTooltipProps(`Категория: ${getTooltipValue(analysisChartDraft.pieCategoryColumn)}`)}
+                          value={analysisChartDraft.pieCategoryColumn}
+                          onChange={(event) => setAnalysisChartDraft((current) => ({
+                            ...current,
+                            pieCategoryColumn: event.target.value,
+                          }))}
+                          disabled={!analysisHeaders.length}
+                        >
+                          <option value="">Выберите столбец</option>
+                          {analysisHeaders.map((header) => (
+                            <option key={header} value={header}>{header}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="analysis-control-row">
+                        <span className="analysis-control-label">Агрегация</span>
+                        <select
+                          {...getAnalysisTooltipProps(`Агрегация: ${getAnalysisAggregationLabel(analysisChartDraft.pieAggregation)}`)}
+                          value={analysisChartDraft.pieAggregation}
+                          onChange={(event) => setAnalysisChartDraft((current) => ({
+                            ...current,
+                            pieAggregation: event.target.value as AnalysisAggregation,
+                          }))}
+                        >
+                          <option value="count">Количество строк</option>
+                          <option value="sum">Сумма по столбцу</option>
+                        </select>
+                      </label>
+                      {analysisChartDraft.pieAggregation === "sum" && (
+                        <label className="analysis-control-row">
+                          <span className="analysis-control-label">Значение</span>
+                          <select
+                            {...getAnalysisTooltipProps(`Значение: ${getTooltipValue(analysisChartDraft.pieValueColumn)}`)}
+                            value={analysisChartDraft.pieValueColumn}
+                            onChange={(event) => setAnalysisChartDraft((current) => ({
+                              ...current,
+                              pieValueColumn: event.target.value,
+                            }))}
+                            disabled={!analysisHeaders.length}
+                          >
+                            <option value="">Выберите столбец</option>
+                            {analysisHeaders.map((header) => (
+                              <option key={header} value={header}>{header}</option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      <label className="analysis-control-row">
+                        <span className="analysis-control-label">Заголовок</span>
+                        <input
+                          {...getAnalysisTooltipProps(`Заголовок: ${getTooltipValue(analysisChartDraft.pieTitle, "не заполнено")}`)}
+                          value={analysisChartDraft.pieTitle}
+                          onChange={(event) => setAnalysisChartDraft((current) => ({
+                            ...current,
+                            pieTitle: event.target.value,
+                          }))}
+                          placeholder="Название диаграммы"
+                        />
+                      </label>
+                      <label className="analysis-control-row">
+                        <span className="analysis-control-label">Топ категорий</span>
+                        <input
+                          {...getAnalysisTooltipProps(`Топ категорий: ${analysisChartDraft.pieTopCount}`)}
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={analysisChartDraft.pieTopCount}
+                          onChange={(event) => setAnalysisChartDraft((current) => ({
+                            ...current,
+                            pieTopCount: Math.max(1, Number(event.target.value || 1)),
+                          }))}
+                        />
+                      </label>
+                      <label className="checkbox-row checkbox-row-inline">
+                        <input
+                          {...getAnalysisTooltipProps(`Подписи: ${analysisChartDraft.pieShowLabels ? "включены" : "выключены"}`)}
+                          type="checkbox"
+                          checked={analysisChartDraft.pieShowLabels}
+                          onChange={(event) => setAnalysisChartDraft((current) => ({
+                            ...current,
+                            pieShowLabels: event.target.checked,
+                          }))}
+                        />
+                        <span className="truncate-text" {...getAnalysisTooltipProps("Подписи")}>Подписи</span>
+                      </label>
+                    </>
+                  )}
+
+                  {analysisChartDraft.type === "bar" && (
+                    <>
+                      <label className="analysis-control-row">
+                        <span className="analysis-control-label">Категория</span>
+                        <select
+                          {...getAnalysisTooltipProps(`Категория: ${getTooltipValue(analysisChartDraft.barCategoryColumn)}`)}
+                          value={analysisChartDraft.barCategoryColumn}
+                          onChange={(event) => setAnalysisChartDraft((current) => ({
+                            ...current,
+                            barCategoryColumn: event.target.value,
+                          }))}
+                          disabled={!analysisHeaders.length}
+                        >
+                          <option value="">Выберите столбец</option>
+                          {analysisHeaders.map((header) => (
+                            <option key={header} value={header}>{header}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="analysis-control-row">
+                        <span className="analysis-control-label">Агрегация</span>
+                        <select
+                          {...getAnalysisTooltipProps(`Агрегация: ${getAnalysisAggregationLabel(analysisChartDraft.barAggregation)}`)}
+                          value={analysisChartDraft.barAggregation}
+                          onChange={(event) => setAnalysisChartDraft((current) => ({
+                            ...current,
+                            barAggregation: event.target.value as AnalysisAggregation,
+                          }))}
+                        >
+                          <option value="count">Количество строк</option>
+                          <option value="sum">Сумма по столбцу</option>
+                        </select>
+                      </label>
+                      {analysisChartDraft.barAggregation === "sum" && (
+                        <label className="analysis-control-row">
+                          <span className="analysis-control-label">Значение</span>
+                          <select
+                            {...getAnalysisTooltipProps(`Значение: ${getTooltipValue(analysisChartDraft.barValueColumn)}`)}
+                            value={analysisChartDraft.barValueColumn}
+                            onChange={(event) => setAnalysisChartDraft((current) => ({
+                              ...current,
+                              barValueColumn: event.target.value,
+                            }))}
+                            disabled={!analysisHeaders.length}
+                          >
+                            <option value="">Выберите столбец</option>
+                            {analysisHeaders.map((header) => (
+                              <option key={header} value={header}>{header}</option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      <label className="analysis-control-row">
+                        <span className="analysis-control-label">Заголовок</span>
+                        <input
+                          {...getAnalysisTooltipProps(`Заголовок: ${getTooltipValue(analysisChartDraft.barTitle, "не заполнено")}`)}
+                          value={analysisChartDraft.barTitle}
+                          onChange={(event) => setAnalysisChartDraft((current) => ({
+                            ...current,
+                            barTitle: event.target.value,
+                          }))}
+                          placeholder="Название диаграммы"
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  <button
+                    className="primary analysis-build-button"
+                    onClick={onBuildAnalysisChart}
+                    disabled={!analysisRows.length}
+                    {...getAnalysisTooltipProps("Построить")}
+                  >
+                    Построить
+                  </button>
+                </div>
+                </div>
+
+                <div className="analysis-chart-preview">
+                  {renderAnalysisChart()}
+                </div>
+                </div>
+
+                <div
+                  className={`analysis-workspace-resizer ${analysisCenterResizing ? "active" : ""}`}
+                  onMouseDown={() => setAnalysisCenterResizing(true)}
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Изменить ширину центральной панели анализа"
+                />
+
+                <div className="analysis-table-side panel">
+                  <div className="analysis-table-header">
+                    <h3>Данные файла</h3>
+                    <div className="summary">Столбцов: {analysisHeaders.length}</div>
+                  </div>
+                  {renderTable(analysisRows, analysisHeaders)}
+                </div>
+              </div>
             </div>
           </section>
         )}
@@ -2495,7 +3179,7 @@ function App() {
               <li>При запуске приложения по умолчанию открывать вкладку Загрузка фактов.</li>
               <li>Для вкладки Настройки добавить защиту через авторизацию и аутентификацию, так как сейчас доступ фактически открыт всем.</li>
               <li>Во вкладке Анализ левую панель сделать управляемой: добавить возможность менять ширину и скрывать ее.</li>
-              <li>Радиокнопку Подготовка данных можно переименовать, но сначала нужно уточнить, не создаст ли это путаницу с шаблоном Простои.</li>
+              <li>Радиокнопка режима анализа переименована в 'Простой'; при дальнейших изменениях важно сохранить понятную связь с шаблоном Простои.</li>
               <li>Текущая ошибка Для шаблона Простои вкладка Анализ недоступна приходит из backend, где анализ для этого шаблона сейчас явно запрещен.</li>
               <li>Безопасный вариант: заранее блокировать Анализ или кнопку Обработать для шаблона Простои и показывать понятное сообщение в интерфейсе, а не backend-ошибку.</li>
               <li>Если анализ для шаблона Простои все-таки нужен, требуется отдельно описать ожидаемую бизнес-логику обработки и результат на примерах.</li>

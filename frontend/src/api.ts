@@ -203,6 +203,18 @@ export async function loadDowntimeFacts(): Promise<LoadResponse> {
   );
 }
 
+export async function uploadAnalysisSource(file: File): Promise<LoadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  return parseJson<LoadResponse>(
+    await fetch(`${API_BASE}/analysis/upload-source`, {
+      method: "POST",
+      body: formData,
+    }),
+  );
+}
+
 export async function runAnalysis(mode: "prepare" | "satisfaction"): Promise<AnalysisResponse> {
   return parseJson<AnalysisResponse>(
     await fetch(`${API_BASE}/analysis/prepare`, {

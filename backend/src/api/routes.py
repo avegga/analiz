@@ -259,6 +259,34 @@ def load_downtime_facts():
     )
 
 
+@router.post("/analysis/upload-source", response_model=LoadResponse)
+def upload_analysis_source(file: UploadFile = File(...)):
+    suffix = Path(file.filename or "analysis-source.xlsx").suffix or ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        rows, headers, total_rows = load_xlsx_as_is(tmp_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Ошибка чтения файла анализа: {exc}") from exc
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    status = "Нет данных" if total_rows == 0 else "Готово"
+
+    return LoadResponse(
+        total_rows=total_rows,
+        valid_count=len(rows),
+        error_count=0,
+        status=status,
+        rows=rows,
+        errors=[],
+        headers=headers,
+        source_file=file.filename or "",
+    )
+
+
 @router.post("/analysis/prepare", response_model=AnalysisResponse)
 def prepare_analysis(payload: FilterPayload):
     if state.current_template_key == "downtime":
