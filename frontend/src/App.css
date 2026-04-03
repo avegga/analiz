@@ -613,10 +613,9 @@ button:disabled {
 }
 
 .table-header-cell {
-  position: relative;
   display: flex;
-  align-items: stretch;
-  min-height: 24px;
+  align-items: center;
+  gap: 2px;
 }
 
 .table-header-title {
@@ -734,4 +733,23 @@ thead th {
   .radio-card {
     width: 100%;
   }
+}
+
+.column-move-btn {
+  background: #f3f6fa;
+  border: 1px solid #b4c9f2;
+  color: #1b427c;
+  border-radius: 3px;
+  font-size: 13px;
+  padding: 0 6px;
+  margin: 0 1px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  height: 22px;
+  line-height: 20px;
+}
+
+.column-move-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
 }

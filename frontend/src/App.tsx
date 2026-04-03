@@ -1464,6 +1464,18 @@ function App() {
     ));
   }
 
+  function moveFactColumn(column: string, direction: -1 | 1) {
+    setDraftVisibleFactColumns((current) => {
+      const idx = current.indexOf(column);
+      if (idx === -1) return current;
+      const newIdx = idx + direction;
+      if (newIdx < 0 || newIdx >= current.length) return current;
+      const next = [...current];
+      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      return next;
+    });
+  }
+
   function onApplyFactColumnSelection() {
     if (!loadHeaders.length) {
       pushNotice("info", "Сначала загрузите данные, чтобы применить конфигурацию столбцов.");
@@ -1704,12 +1716,28 @@ function App() {
             <table className="data-table" style={{ width: `${totalDataTableWidth || DEFAULT_COLUMN_WIDTH}px` }}>
             <thead>
               <tr>
-                {selectedFactColumns.map((header) => {
+                {selectedFactColumns.map((header, idx) => {
                   const width = getEffectiveColumnWidth(header);
                   return (
                     <th key={header} style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}>
                       <div className="table-header-cell">
                         <span className="table-header-title" title={header}>{header}</span>
+                        <button
+                          className="column-move-btn"
+                          title="Влево"
+                          style={{ marginLeft: 4, opacity: idx === 0 ? 0.3 : 1 }}
+                          disabled={idx === 0}
+                          onClick={() => moveFactColumn(header, -1)}
+                          tabIndex={-1}
+                        >←</button>
+                        <button
+                          className="column-move-btn"
+                          title="Вправо"
+                          style={{ marginLeft: 2, opacity: idx === selectedFactColumns.length - 1 ? 0.3 : 1 }}
+                          disabled={idx === selectedFactColumns.length - 1}
+                          onClick={() => moveFactColumn(header, 1)}
+                          tabIndex={-1}
+                        >→</button>
                         <span
                           className="column-resize-handle"
                           onMouseDown={(event) => {
