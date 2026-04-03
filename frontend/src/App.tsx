@@ -71,6 +71,15 @@ const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "analiz.columnWidths";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
 const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
   {
+    id: "2026-04-03T13:44:00",
+    title: "03.04.2026 13:44:00",
+    text: [
+      "Исправлена отрисовка порядка столбцов в таблице 'Данные'.",
+      "- Таблица больше не возвращает столбцы в исходный порядок файла после нажатия на стрелки.",
+      "- Перестановка теперь видна сразу после клика: столбец меняет место немедленно.",
+    ].join("\n"),
+  },
+  {
     id: "2026-04-03T13:31:00",
     title: "03.04.2026 13:31:00",
     text: [
@@ -157,7 +166,8 @@ const DEFAULT_FACTS_GENERAL_SETTINGS: FactsGeneralSettings = {
 };
 
 function orderColumnsByHeaders(headers: string[], columns: string[]): string[] {
-  return headers.filter((header) => columns.includes(header));
+  const allowedHeaders = new Set(headers);
+  return columns.filter((column) => allowedHeaders.has(column));
 }
 
 function normalizeColumnWidths(widths: Record<string, number>, columns: string[]): Record<string, number> {
