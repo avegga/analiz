@@ -49,6 +49,11 @@ type FactsGeneralSettings = {
   rowLimit: number;
   hideMoneyCents: boolean;
 };
+type ColumnMoveAnimation = {
+  column: string;
+  direction: -1 | 1;
+  key: number;
+};
 
 const DOWNTIME_TEMPLATE_KEY = "downtime";
 const DEFAULT_FACTS_PANEL_WIDTH = 320;
@@ -65,6 +70,15 @@ const ANALYSIS_PANEL_WIDTH_STORAGE_KEY = "analiz.analysisPanelWidth";
 const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "analiz.columnWidths";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
 const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
+  {
+    id: "2026-04-03T13:31:00",
+    title: "03.04.2026 13:31:00",
+    text: [
+      "Добавлена анимация при перестановке столбцов в таблице 'Данные'.",
+      "- После нажатия на стрелки переставляемый столбец кратко подсвечивается и смещается в сторону движения.",
+      "- Анимация сделана лёгкой, чтобы движение было заметнее без лишней нагрузки на интерфейс.",
+    ].join("\n"),
+  },
   {
     id: "2026-04-03T13:18:00",
     title: "03.04.2026 13:18:00",
@@ -727,6 +741,7 @@ function App() {
   ));
   const [analysisPanelResizing, setAnalysisPanelResizing] = useState(false);
   const [activeColumnResize, setActiveColumnResize] = useState<{ column: string; startX: number; startWidth: number } | null>(null);
+  const [columnMoveAnimation, setColumnMoveAnimation] = useState<ColumnMoveAnimation | null>(null);
 
   const hasRoute = settingsSummary.has_db_path_1;
   const templateOptions = templates;
@@ -1246,6 +1261,20 @@ function App() {
     };
   }, [activeColumnResize, factsGeneralSettings.minWidth]);
 
+  useEffect(() => {
+    if (!columnMoveAnimation) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setColumnMoveAnimation((current) => (current?.key === columnMoveAnimation.key ? null : current));
+    }, 260);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [columnMoveAnimation]);
+
   const visibleRows = useMemo(
     () => sanitizeAnalysisRows(analysisResult?.rows ?? [], analysisMode),
     [analysisMode, analysisResult],
@@ -1491,6 +1520,10 @@ function App() {
 
     setVisibleFactColumns(nextColumns);
     setDraftVisibleFactColumns(nextColumns);
+    setColumnMoveAnimation(null);
+    window.requestAnimationFrame(() => {
+      setColumnMoveAnimation({ column, direction, key: Date.now() });
+    });
     setSavedColumnConfig((current) => (current && current.template_key === templateKey
       ? {
         ...current,
@@ -1760,8 +1793,15 @@ function App() {
               <tr>
                 {selectedFactColumns.map((header, idx) => {
                   const width = getEffectiveColumnWidth(header);
+                  const moveClassName = columnMoveAnimation?.column === header
+                    ? `column-moved column-moved-${columnMoveAnimation.direction > 0 ? "right" : "left"}`
+                    : "";
                   return (
-                    <th key={header} style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}>
+                    <th
+                      key={header}
+                      className={moveClassName || undefined}
+                      style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
+                    >
                       <div className="table-header-cell">
                         <span className="table-header-title" title={header}>{header}</span>
                         <span className="column-move-actions">
@@ -1804,8 +1844,15 @@ function App() {
                   {selectedFactColumns.map((header) => {
                     const width = getEffectiveColumnWidth(header);
                     const value = formatCellValue(row[header], resolvedColumnKinds[header] ?? "string", columnTypeOverrides[header], factsGeneralSettings);
+                    const moveClassName = columnMoveAnimation?.column === header
+                      ? `column-moved column-moved-${columnMoveAnimation.direction > 0 ? "right" : "left"}`
+                      : "";
                     return (
-                      <td key={header} style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}>
+                      <td
+                        key={header}
+                        className={moveClassName || undefined}
+                        style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}
+                      >
                         <div className="data-cell-value" title={value}>{value}</div>
                       </td>
                     );

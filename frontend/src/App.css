@@ -775,3 +775,37 @@ thead th {
   opacity: 0.3;
   cursor: default;
 }
+
+@keyframes columnMoveLeft {
+  0% {
+    transform: translateX(14px);
+    background-color: rgba(36, 116, 214, 0.18);
+  }
+  100% {
+    transform: translateX(0);
+    background-color: transparent;
+  }
+}
+
+@keyframes columnMoveRight {
+  0% {
+    transform: translateX(-14px);
+    background-color: rgba(36, 116, 214, 0.18);
+  }
+  100% {
+    transform: translateX(0);
+    background-color: transparent;
+  }
+}
+
+.column-moved {
+  position: relative;
+}
+
+.column-moved.column-moved-left {
+  animation: columnMoveLeft 0.24s ease-out;
+}
+
+.column-moved.column-moved-right {
+  animation: columnMoveRight 0.24s ease-out;
+}
