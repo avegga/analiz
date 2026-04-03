@@ -63,18 +63,33 @@ const SETTINGS_TOKEN_STORAGE_KEY = "analiz.settingsAccessToken";
 const ANALYSIS_PANEL_VISIBLE_STORAGE_KEY = "analiz.analysisPanelVisible";
 const ANALYSIS_PANEL_WIDTH_STORAGE_KEY = "analiz.analysisPanelWidth";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
-const CURRENT_UPDATE_JOURNAL_ENTRY: JournalEntry = {
-  id: "2026-04-03T11:34:15",
-  title: "03.04.2026 11:34:15",
-  text: [
-    "Обновлена вкладка 'Обработка' и добавлен журнал изменений.",
-    "- Чекбоксы во вкладке 'Обработка' заменены на радиокнопки.",
-    "- Для сценария 'Парсинг Провалы' скрыт блок 'Режим' и оставлены поля 'Столбец из данных', 'Параметр' и кнопка 'Парсинг'.",
-    "- Кнопка 'Парсинг' разбивает значения выбранного столбца по указанному разделителю и добавляет новые столбцы в таблицу данных.",
-    "- Ширина вкладок панели данных уменьшена примерно на 20%.",
-    "- Добавлена верхняя вкладка 'Журнал' с записью изменений и временем создания записи.",
-  ].join("\n"),
-};
+const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
+  {
+    id: "2026-04-03T11:48:56",
+    title: "03.04.2026 11:48:56",
+    text: [
+      "Изменен алгоритм парсинга во вкладке 'Обработка'.",
+      "- Поле 'Параметр' переименовано в 'Разделитель'.",
+      "- Кнопка 'Парсинг' теперь изменяет строки в таблице 'Данные' только для текущей сессии.",
+      "- Парсинг применяется только к строкам, которые сейчас видны в таблице 'Данные'.",
+      "- Если в выбранном столбце найден разделитель, исходная строка заменяется набором строк-копий, где меняется только значение выбранного столбца.",
+      "- Пустые части после разделения сохраняются как отдельные строки, а пробелы по краям частей обрезаются.",
+      "- Скрытые строки остаются без изменений, а повторный парсинг выполняется уже по результату предыдущего парсинга.",
+    ].join("\n"),
+  },
+  {
+    id: "2026-04-03T11:34:15",
+    title: "03.04.2026 11:34:15",
+    text: [
+      "Обновлена вкладка 'Обработка' и добавлен журнал изменений.",
+      "- Чекбоксы во вкладке 'Обработка' заменены на радиокнопки.",
+      "- Для сценария 'Парсинг Провалы' скрыт блок 'Режим' и оставлены поля 'Столбец из данных', 'Параметр' и кнопка 'Парсинг'.",
+      "- Кнопка 'Парсинг' разбивает значения выбранного столбца по указанному разделителю и добавляет новые столбцы в таблицу данных.",
+      "- Ширина вкладок панели данных уменьшена примерно на 20%.",
+      "- Добавлена верхняя вкладка 'Журнал' с записью изменений и временем создания записи.",
+    ].join("\n"),
+  },
+];
 const DEFAULT_FACTS_GENERAL_SETTINGS: FactsGeneralSettings = {
   defaultWidth: DEFAULT_COLUMN_WIDTH,
   minWidth: MIN_COLUMN_WIDTH,
@@ -155,6 +170,12 @@ function readStoredNumber(key: string, fallback: number, min: number, max: numbe
     return fallback;
   }
   return Math.max(min, Math.min(max, rawValue));
+}
+
+function mergeSeedJournalEntries(entries: JournalEntry[]): JournalEntry[] {
+  const existingIds = new Set(entries.map((entry) => entry.id));
+  const missingSeedEntries = SEED_JOURNAL_ENTRIES.filter((entry) => !existingIds.has(entry.id));
+  return [...missingSeedEntries, ...entries];
 }
 
 function createTimestampedFileName(prefix: string): string {
@@ -443,12 +464,9 @@ function App() {
         ))
         : [];
 
-      if (entries.some((entry) => entry.id === CURRENT_UPDATE_JOURNAL_ENTRY.id)) {
-        return entries;
-      }
-      return [CURRENT_UPDATE_JOURNAL_ENTRY, ...entries];
+      return mergeSeedJournalEntries(entries);
     } catch {
-      return [CURRENT_UPDATE_JOURNAL_ENTRY];
+      return SEED_JOURNAL_ENTRIES;
     }
   });
   const [factsSidebarTab, setFactsSidebarTab] = useState<FactsSidebarTabKey>("columns");
@@ -541,43 +559,41 @@ function App() {
 
     const delimiter = processingSettings.param.trim();
     if (!delimiter) {
-      setStatus("Укажите разделитель в поле 'Параметр'.");
-      pushNotice("info", "Укажите разделитель в поле 'Параметр'.");
+      setStatus("Укажите разделитель в поле 'Разделитель'.");
+      pushNotice("info", "Укажите разделитель в поле 'Разделитель'.");
       return;
     }
 
-    const rows = loadResult.rows;
-    const splitValues = rows.map((row) => String(row[targetColumn] ?? "").split(delimiter).map((item) => item.trim()));
-    const maxParts = splitValues.reduce((max, parts) => Math.max(max, parts.length), 0);
-
-    if (!maxParts) {
-      setStatus("Не удалось получить значения для парсинга.");
-      pushNotice("info", "Не удалось получить значения для парсинга.");
+    const visibleRows = displayedFactRows;
+    const hasParsableRow = visibleRows.some((row) => String(row[targetColumn] ?? "").includes(delimiter));
+    if (!hasParsableRow) {
+      setStatus("Среди видимых строк нет данных для парсинга по указанному разделителю.");
+      pushNotice("info", "Среди видимых строк нет данных для парсинга по указанному разделителю.");
       return;
     }
 
-    const nextHeaders = [...loadResult.headers];
-    const generatedHeaders = Array.from({ length: maxParts }, (_, index) => `${targetColumn}_${index + 1}`);
-    generatedHeaders.forEach((header) => {
-      if (!nextHeaders.includes(header)) {
-        nextHeaders.push(header);
+    const visibleRowsSet = new Set(visibleRows);
+    const nextRows = loadResult.rows.flatMap((row) => {
+      if (!visibleRowsSet.has(row)) {
+        return [row];
       }
-    });
 
-    const nextRows = rows.map((row, rowIndex) => {
-      const nextRow = { ...row };
-      generatedHeaders.forEach((header, headerIndex) => {
-        nextRow[header] = splitValues[rowIndex][headerIndex] ?? "";
-      });
-      return nextRow;
+      const rawValue = String(row[targetColumn] ?? "");
+      if (!rawValue.includes(delimiter)) {
+        return [row];
+      }
+
+      return rawValue.split(delimiter).map((part) => ({
+        ...row,
+        [targetColumn]: part.trim(),
+      }));
     });
 
     setLoadResult({
       ...loadResult,
-      headers: nextHeaders,
       rows: nextRows,
     });
-    setStatus(`Парсинг выполнен для столбца '${targetColumn}'. Добавлено столбцов: ${generatedHeaders.length}.`);
+    setStatus(`Парсинг выполнен для столбца '${targetColumn}'. Видимые строки обновлены.`);
     pushNotice("success", `Парсинг выполнен для столбца '${targetColumn}'.`);
   }
   const [visibleFactColumns, setVisibleFactColumns] = useState<string[]>([]);
@@ -732,6 +748,20 @@ function App() {
     }
     return filteredFactRows.slice(0, rowLimit);
   }, [factsGeneralSettings.rowLimit, filteredFactRows]);
+
+  const canRunProcessingParse = useMemo(() => {
+    if (processingSettings.selectedOption !== "parseReason") {
+      return false;
+    }
+
+    const targetColumn = processingSettings.parseReasonColumn.trim();
+    const delimiter = processingSettings.param.trim();
+    if (!targetColumn || !delimiter || !displayedFactRows.length) {
+      return false;
+    }
+
+    return displayedFactRows.some((row) => String(row[targetColumn] ?? "").includes(delimiter));
+  }, [displayedFactRows, processingSettings.param, processingSettings.parseReasonColumn, processingSettings.selectedOption]);
 
   function getEffectiveColumnWidth(header: string): number {
     return Math.max(
@@ -1940,7 +1970,7 @@ function App() {
                                 </select>
                               </label>
                               <label>
-                                Параметр
+                                Разделитель
                                 <input
                                   type="text"
                                   placeholder="Разделитель"
@@ -1948,7 +1978,7 @@ function App() {
                                   onChange={e => setProcessingSettings(s => ({ ...s, param: e.target.value }))}
                                 />
                               </label>
-                              <button className="action-apply" onClick={runProcessingParse} disabled={!loadHeaders.length}>
+                              <button className="action-apply" onClick={runProcessingParse} disabled={!canRunProcessingParse}>
                                 Парсинг
                               </button>
                             </>
