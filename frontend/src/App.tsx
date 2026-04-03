@@ -65,6 +65,17 @@ const ANALYSIS_PANEL_WIDTH_STORAGE_KEY = "analiz.analysisPanelWidth";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
 const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
   {
+    id: "2026-04-03T12:11:34",
+    title: "03.04.2026 12:11:34",
+    text: [
+      "Улучшено отображение вкладок панели данных и поведение списка строк.",
+      "- Подписи вкладок 'Общие', 'Столбцы', 'Фильтры', 'Типы', 'Обработка' теперь обрезаются границей кнопки и не заходят на соседние вкладки.",
+      "- Сохраненная конфигурация столбцов теперь автоматически применяется после новой загрузки данных и после перезапуска сессии для выбранного шаблона.",
+      "- По умолчанию после загрузки на экран выводится не более 10 строк.",
+      "- В закладке 'Общие' добавлена кнопка 'Показать все строки', которая снимает лимит строк на экране, сохраняя все текущие фильтры и ограничения отображения.",
+    ].join("\n"),
+  },
+  {
     id: "2026-04-03T11:52:04",
     title: "03.04.2026 11:52:04",
     text: [
@@ -104,7 +115,7 @@ const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
 const DEFAULT_FACTS_GENERAL_SETTINGS: FactsGeneralSettings = {
   defaultWidth: DEFAULT_COLUMN_WIDTH,
   minWidth: MIN_COLUMN_WIDTH,
-  rowLimit: 0,
+  rowLimit: 10,
   hideMoneyCents: false,
 };
 
@@ -547,6 +558,13 @@ function App() {
     setProcessingSettings(savedProcessingSettings);
     setStatus("Сохранённые настройки обработки применены.");
     pushNotice("success", "Сохранённые настройки обработки применены.");
+  }
+
+  function showAllFactRows() {
+    setFactsGeneralSettings((current) => ({ ...current, rowLimit: 0 }));
+    setDraftFactsGeneralSettings((current) => ({ ...current, rowLimit: 0 }));
+    setStatus("Лимит строк снят. На экране показаны все строки с учетом текущих фильтров.");
+    pushNotice("success", "Лимит строк снят.");
   }
 
   function undoLastProcessingParse() {
@@ -1015,6 +1033,32 @@ function App() {
     setColumnFilters(savedFilters);
     setDraftColumnFilters(savedFilters);
   }, [loadHeaders, savedFilterConfig, templateKey]);
+
+  useEffect(() => {
+    if (!templateKey || !loadHeaders.length || !savedColumnConfig || savedColumnConfig.template_key !== templateKey) {
+      return;
+    }
+
+    const savedColumns = orderColumnsByHeaders(loadHeaders, savedColumnConfig.columns ?? []);
+    if (savedColumns.length) {
+      setVisibleFactColumns(savedColumns);
+      setDraftVisibleFactColumns(savedColumns);
+    }
+
+    const restoredGeneralSettings = fromColumnConfigGeneral(savedColumnConfig.general);
+    setFactsGeneralSettings(restoredGeneralSettings);
+    setDraftFactsGeneralSettings(restoredGeneralSettings);
+    setColumnWidths(() => {
+      const next: Record<string, number> = {};
+      const savedWidths = savedColumnConfig.widths ?? {};
+      loadHeaders.forEach((header) => {
+        if (savedWidths[header]) {
+          next[header] = savedWidths[header];
+        }
+      });
+      return next;
+    });
+  }, [loadHeaders, savedColumnConfig, templateKey]);
 
   useEffect(() => {
     if (templateKey !== DOWNTIME_TEMPLATE_KEY || activeTab !== "facts") {
@@ -1872,6 +1916,9 @@ function App() {
                         <div className="facts-sidebar-actions">
                           <button className="action-apply" onClick={onApplyGeneralSettings} disabled={!hasPendingGeneralSettingsChanges}>
                             Применить
+                          </button>
+                          <button className="action-save" onClick={showAllFactRows} disabled={factsGeneralSettings.rowLimit === 0 && draftFactsGeneralSettings.rowLimit === 0}>
+                            Показать все строки
                           </button>
                           <button className="action-restore" onClick={onResetIndividualWidths} disabled={!Object.keys(columnWidths).length}>
                             Сбросить индивидуальные ширины

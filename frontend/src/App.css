@@ -235,6 +235,10 @@ button:disabled {
 .sidebar-tabs button {
   padding: 8px 6px;
   background: #eef4f6;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-tabs button.active {
