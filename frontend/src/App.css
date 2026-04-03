@@ -613,17 +613,38 @@ button:disabled {
 }
 
 .table-header-cell {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
+  min-height: 24px;
+  padding-right: 18px;
 }
 
 .table-header-title {
   display: block;
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-right: 10px;
+}
+
+.column-move-actions {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  display: flex;
+  gap: 2px;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+thead th:hover .column-move-actions,
+thead th:focus-within .column-move-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .data-cell-value {
@@ -740,13 +761,14 @@ thead th {
   border: 1px solid #b4c9f2;
   color: #1b427c;
   border-radius: 3px;
-  font-size: 13px;
-  padding: 0 6px;
-  margin: 0 1px;
+  font-size: 12px;
+  padding: 0;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
-  height: 22px;
-  line-height: 20px;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  line-height: 18px;
 }
 
 .column-move-btn:disabled {

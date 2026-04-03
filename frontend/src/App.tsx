@@ -66,6 +66,16 @@ const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "analiz.columnWidths";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
 const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
   {
+    id: "2026-04-03T13:18:00",
+    title: "03.04.2026 13:18:00",
+    text: [
+      "Исправлено управление порядком столбцов в таблице 'Данные'.",
+      "- Кнопки перемещения столбцов теперь не съедают место у заголовка и показываются только при наведении на столбец.",
+      "- Перемещение столбцов теперь применяется сразу в таблице без дополнительной кнопки 'Применить'.",
+      "- Новый порядок столбцов автоматически сохраняется между сессиями для текущего шаблона.",
+    ].join("\n"),
+  },
+  {
     id: "2026-04-03T12:41:13",
     title: "03.04.2026 12:41:13",
     text: [
@@ -1465,37 +1475,47 @@ function App() {
   }
 
   async function moveFactColumn(column: string, direction: -1 | 1) {
-    setDraftVisibleFactColumns((current) => {
-      const idx = current.indexOf(column);
-      if (idx === -1) return current;
-      const newIdx = idx + direction;
-      if (newIdx < 0 || newIdx >= current.length) return current;
-      const next = [...current];
-      [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
-      // Автосохраняем порядок в localStorage
-      if (templateKey && loadHeaders.length) {
-        window.localStorage.setItem(
-          `analiz.columnOrder.${templateKey}`,
-          JSON.stringify(orderColumnsByHeaders(loadHeaders, next))
-        );
-        // Автосохраняем на сервере (saveColumnConfig)
-        (async () => {
-          try {
-            const normalizedWidths = normalizeColumnWidths(columnWidths, orderColumnsByHeaders(loadHeaders, next));
-            await saveColumnConfig(
-              templateKey,
-              orderColumnsByHeaders(loadHeaders, next),
-              normalizedWidths,
-              toColumnConfigGeneral(factsGeneralSettings)
-            );
-            setStatus("Порядок столбцов сохранён.");
-          } catch (err) {
-            setStatus("Ошибка автосохранения порядка столбцов: " + String(err));
-          }
-        })();
+    const currentColumns = [...selectedFactColumns];
+    const index = currentColumns.indexOf(column);
+    if (index === -1) {
+      return;
+    }
+
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= currentColumns.length) {
+      return;
+    }
+
+    const nextColumns = [...currentColumns];
+    [nextColumns[index], nextColumns[nextIndex]] = [nextColumns[nextIndex], nextColumns[index]];
+
+    setVisibleFactColumns(nextColumns);
+    setDraftVisibleFactColumns(nextColumns);
+    setSavedColumnConfig((current) => (current && current.template_key === templateKey
+      ? {
+        ...current,
+        columns: nextColumns,
       }
-      return next;
-    });
+      : current));
+
+    if (!templateKey || !loadHeaders.length) {
+      return;
+    }
+
+    try {
+      const normalizedWidths = normalizeColumnWidths(columnWidths, nextColumns);
+      const config = await saveColumnConfig(
+        templateKey,
+        nextColumns,
+        normalizedWidths,
+        toColumnConfigGeneral(factsGeneralSettings),
+      );
+      setSavedColumnConfig(config);
+      setStatus("Порядок столбцов сохранён.");
+    } catch (err) {
+      setStatus(`Ошибка автосохранения порядка столбцов: ${String(err)}`);
+      pushNotice("error", `Ошибка автосохранения порядка столбцов: ${String(err)}`);
+    }
   }
 
   function onApplyFactColumnSelection() {
@@ -1744,22 +1764,22 @@ function App() {
                     <th key={header} style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}>
                       <div className="table-header-cell">
                         <span className="table-header-title" title={header}>{header}</span>
-                        <button
-                          className="column-move-btn"
-                          title="Влево"
-                          style={{ marginLeft: 4, opacity: idx === 0 ? 0.3 : 1 }}
-                          disabled={idx === 0}
-                          onClick={() => moveFactColumn(header, -1)}
-                          tabIndex={-1}
-                        >←</button>
-                        <button
-                          className="column-move-btn"
-                          title="Вправо"
-                          style={{ marginLeft: 2, opacity: idx === selectedFactColumns.length - 1 ? 0.3 : 1 }}
-                          disabled={idx === selectedFactColumns.length - 1}
-                          onClick={() => moveFactColumn(header, 1)}
-                          tabIndex={-1}
-                        >→</button>
+                        <span className="column-move-actions">
+                          <button
+                            className="column-move-btn"
+                            title="Влево"
+                            disabled={idx === 0}
+                            onClick={() => void moveFactColumn(header, -1)}
+                            tabIndex={-1}
+                          >←</button>
+                          <button
+                            className="column-move-btn"
+                            title="Вправо"
+                            disabled={idx === selectedFactColumns.length - 1}
+                            onClick={() => void moveFactColumn(header, 1)}
+                            tabIndex={-1}
+                          >→</button>
+                        </span>
                         <span
                           className="column-resize-handle"
                           onMouseDown={(event) => {
