@@ -1464,7 +1464,7 @@ function App() {
     ));
   }
 
-  function moveFactColumn(column: string, direction: -1 | 1) {
+  async function moveFactColumn(column: string, direction: -1 | 1) {
     setDraftVisibleFactColumns((current) => {
       const idx = current.indexOf(column);
       if (idx === -1) return current;
@@ -1472,6 +1472,28 @@ function App() {
       if (newIdx < 0 || newIdx >= current.length) return current;
       const next = [...current];
       [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+      // Автосохраняем порядок в localStorage
+      if (templateKey && loadHeaders.length) {
+        window.localStorage.setItem(
+          `analiz.columnOrder.${templateKey}`,
+          JSON.stringify(orderColumnsByHeaders(loadHeaders, next))
+        );
+        // Автосохраняем на сервере (saveColumnConfig)
+        (async () => {
+          try {
+            const normalizedWidths = normalizeColumnWidths(columnWidths, orderColumnsByHeaders(loadHeaders, next));
+            await saveColumnConfig(
+              templateKey,
+              orderColumnsByHeaders(loadHeaders, next),
+              normalizedWidths,
+              toColumnConfigGeneral(factsGeneralSettings)
+            );
+            setStatus("Порядок столбцов сохранён.");
+          } catch (err) {
+            setStatus("Ошибка автосохранения порядка столбцов: " + String(err));
+          }
+        })();
+      }
       return next;
     });
   }
