@@ -28,10 +28,11 @@ import {
   type TemplateInfo,
 } from "./api";
 
-type TabKey = "facts" | "analysis" | "instructions" | "settings";
-type FactsSidebarTabKey = "general" | "columns" | "filters" | "types";
+type TabKey = "facts" | "analysis" | "instructions" | "journal" | "settings";
+type FactsSidebarTabKey = "general" | "columns" | "filters" | "types" | "processing";
 type NoticeType = "success" | "error" | "info";
 type Notice = { id: number; type: NoticeType; text: string };
+type JournalEntry = { id: string; title: string; text: string };
 type AnalysisMode = "prepare" | "satisfaction";
 type ColumnKind = "string" | "number" | "date" | "datetime" | "money";
 type NumberFilterOperator = "eq" | "gt" | "lt";
@@ -61,6 +62,19 @@ const MIN_COLUMN_WIDTH = 60;
 const SETTINGS_TOKEN_STORAGE_KEY = "analiz.settingsAccessToken";
 const ANALYSIS_PANEL_VISIBLE_STORAGE_KEY = "analiz.analysisPanelVisible";
 const ANALYSIS_PANEL_WIDTH_STORAGE_KEY = "analiz.analysisPanelWidth";
+const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
+const CURRENT_UPDATE_JOURNAL_ENTRY: JournalEntry = {
+  id: "2026-04-03T11:34:15",
+  title: "03.04.2026 11:34:15",
+  text: [
+    "Обновлена вкладка 'Обработка' и добавлен журнал изменений.",
+    "- Чекбоксы во вкладке 'Обработка' заменены на радиокнопки.",
+    "- Для сценария 'Парсинг Провалы' скрыт блок 'Режим' и оставлены поля 'Столбец из данных', 'Параметр' и кнопка 'Парсинг'.",
+    "- Кнопка 'Парсинг' разбивает значения выбранного столбца по указанному разделителю и добавляет новые столбцы в таблицу данных.",
+    "- Ширина вкладок панели данных уменьшена примерно на 20%.",
+    "- Добавлена верхняя вкладка 'Журнал' с записью изменений и временем создания записи.",
+  ].join("\n"),
+};
 const DEFAULT_FACTS_GENERAL_SETTINGS: FactsGeneralSettings = {
   defaultWidth: DEFAULT_COLUMN_WIDTH,
   minWidth: MIN_COLUMN_WIDTH,
@@ -416,7 +430,156 @@ function App() {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [notices, setNotices] = useState<Notice[]>([]);
+  const [journalEntries] = useState<JournalEntry[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(JOURNAL_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      const entries = Array.isArray(parsed)
+        ? parsed.filter((entry): entry is JournalEntry => (
+          Boolean(entry)
+          && typeof entry.id === "string"
+          && typeof entry.title === "string"
+          && typeof entry.text === "string"
+        ))
+        : [];
+
+      if (entries.some((entry) => entry.id === CURRENT_UPDATE_JOURNAL_ENTRY.id)) {
+        return entries;
+      }
+      return [CURRENT_UPDATE_JOURNAL_ENTRY, ...entries];
+    } catch {
+      return [CURRENT_UPDATE_JOURNAL_ENTRY];
+    }
+  });
   const [factsSidebarTab, setFactsSidebarTab] = useState<FactsSidebarTabKey>("columns");
+
+  // Processing tab state
+  type ProcessingSettings = {
+    selectedOption: "parseReason" | "option2";
+    mode: string;
+    parseReasonColumn: string;
+    param: string;
+  };
+  const DEFAULT_PROCESSING_SETTINGS: ProcessingSettings = {
+    selectedOption: "parseReason",
+    mode: "mode1",
+    parseReasonColumn: "",
+    param: "",
+  };
+  const [processingSettings, setProcessingSettings] = useState<ProcessingSettings>(DEFAULT_PROCESSING_SETTINGS);
+  const [savedProcessingSettings, setSavedProcessingSettings] = useState<ProcessingSettings>(DEFAULT_PROCESSING_SETTINGS);
+
+  function normalizeProcessingSettings(raw: unknown): ProcessingSettings {
+    const value = (raw && typeof raw === "object") ? raw as Record<string, unknown> : {};
+    const selectedOption = value.selectedOption === "option2"
+      ? "option2"
+      : value.option2 === true && value.option1 !== true
+        ? "option2"
+        : "parseReason";
+
+    return {
+      selectedOption,
+      mode: typeof value.mode === "string" && value.mode.trim() ? value.mode : DEFAULT_PROCESSING_SETTINGS.mode,
+      parseReasonColumn: typeof value.parseReasonColumn === "string" ? value.parseReasonColumn : "",
+      param: typeof value.param === "string" ? value.param : "",
+    };
+  }
+
+  // Сохранять/загружать настройки обработки по шаблону
+  useEffect(() => {
+    window.localStorage.setItem(JOURNAL_STORAGE_KEY, JSON.stringify(journalEntries));
+  }, [journalEntries]);
+
+  useEffect(() => {
+    if (!templateKey) return;
+    const raw = window.localStorage.getItem(`analiz.processing.${templateKey}`);
+    if (raw) {
+      try {
+        const normalized = normalizeProcessingSettings(JSON.parse(raw));
+        setProcessingSettings(normalized);
+        setSavedProcessingSettings(normalized);
+      } catch {}
+    } else {
+      setProcessingSettings(DEFAULT_PROCESSING_SETTINGS);
+      setSavedProcessingSettings(DEFAULT_PROCESSING_SETTINGS);
+    }
+  }, [templateKey]);
+
+  function saveProcessingSettings() {
+    if (!templateKey) return;
+    window.localStorage.setItem(`analiz.processing.${templateKey}`, JSON.stringify(processingSettings));
+    setSavedProcessingSettings(processingSettings);
+    setStatus("Настройки обработки сохранены.");
+    pushNotice("success", "Настройки обработки сохранены.");
+  }
+
+  function restoreProcessingSettings() {
+    setProcessingSettings(savedProcessingSettings);
+    setStatus("Сохранённые настройки обработки применены.");
+    pushNotice("success", "Сохранённые настройки обработки применены.");
+  }
+
+  function runProcessingParse() {
+    if (!loadResult?.rows?.length) {
+      setStatus("Нет данных для парсинга.");
+      pushNotice("info", "Нет данных для парсинга.");
+      return;
+    }
+
+    if (processingSettings.selectedOption !== "parseReason") {
+      setStatus("Включите 'Парсинг Провалы'.");
+      pushNotice("info", "Включите 'Парсинг Провалы'.");
+      return;
+    }
+
+    const targetColumn = processingSettings.parseReasonColumn.trim();
+    if (!targetColumn) {
+      setStatus("Выберите столбец для парсинга.");
+      pushNotice("info", "Выберите столбец для парсинга.");
+      return;
+    }
+
+    const delimiter = processingSettings.param.trim();
+    if (!delimiter) {
+      setStatus("Укажите разделитель в поле 'Параметр'.");
+      pushNotice("info", "Укажите разделитель в поле 'Параметр'.");
+      return;
+    }
+
+    const rows = loadResult.rows;
+    const splitValues = rows.map((row) => String(row[targetColumn] ?? "").split(delimiter).map((item) => item.trim()));
+    const maxParts = splitValues.reduce((max, parts) => Math.max(max, parts.length), 0);
+
+    if (!maxParts) {
+      setStatus("Не удалось получить значения для парсинга.");
+      pushNotice("info", "Не удалось получить значения для парсинга.");
+      return;
+    }
+
+    const nextHeaders = [...loadResult.headers];
+    const generatedHeaders = Array.from({ length: maxParts }, (_, index) => `${targetColumn}_${index + 1}`);
+    generatedHeaders.forEach((header) => {
+      if (!nextHeaders.includes(header)) {
+        nextHeaders.push(header);
+      }
+    });
+
+    const nextRows = rows.map((row, rowIndex) => {
+      const nextRow = { ...row };
+      generatedHeaders.forEach((header, headerIndex) => {
+        nextRow[header] = splitValues[rowIndex][headerIndex] ?? "";
+      });
+      return nextRow;
+    });
+
+    setLoadResult({
+      ...loadResult,
+      headers: nextHeaders,
+      rows: nextRows,
+    });
+    setStatus(`Парсинг выполнен для столбца '${targetColumn}'. Добавлено столбцов: ${generatedHeaders.length}.`);
+    pushNotice("success", `Парсинг выполнен для столбца '${targetColumn}'.`);
+  }
   const [visibleFactColumns, setVisibleFactColumns] = useState<string[]>([]);
   const [draftVisibleFactColumns, setDraftVisibleFactColumns] = useState<string[]>([]);
   const [savedColumnConfig, setSavedColumnConfig] = useState<ColumnConfig | null>(null);
@@ -756,6 +919,16 @@ function App() {
       Object.entries(current).filter(([header]) => loadHeaders.includes(header)),
     ));
   }, [loadHeaders]);
+
+  useEffect(() => {
+    if (!templateKey || !loadHeaders.length || !savedFilterConfig || savedFilterConfig.template_key !== templateKey) {
+      return;
+    }
+
+    const savedFilters = mergeFiltersWithHeaders(loadHeaders, normalizeFilterConfig(savedFilterConfig.filters));
+    setColumnFilters(savedFilters);
+    setDraftColumnFilters(savedFilters);
+  }, [loadHeaders, savedFilterConfig, templateKey]);
 
   useEffect(() => {
     if (templateKey !== DOWNTIME_TEMPLATE_KEY || activeTab !== "facts") {
@@ -1390,6 +1563,9 @@ function App() {
           >
             Инструкции
           </button>
+          <button className={activeTab === "journal" ? "active" : ""} onClick={() => setActiveTab("journal")}>
+            Журнал
+          </button>
           <button className={activeTab === "settings" ? "active" : ""} onClick={() => void onOpenSettingsTab()} disabled={busy}>
             Настройки
           </button>
@@ -1545,6 +1721,9 @@ function App() {
                       </button>
                       <button className={factsSidebarTab === "types" ? "active" : ""} onClick={() => setFactsSidebarTab("types")}>
                         Типы
+                      </button>
+                      <button className={factsSidebarTab === "processing" ? "active" : ""} onClick={() => setFactsSidebarTab("processing")}> 
+                        Обработка
                       </button>
                     </div>
 
@@ -1710,6 +1889,7 @@ function App() {
                             Сохранить типы
                           </button>
                           <button
+                            className="action-restore"
                             onClick={() => {
                               setColumnTypeOverrides(savedColumnTypeConfig?.overrides ?? {});
                               setStatus("Сохраненные типы применены.");
@@ -1717,6 +1897,79 @@ function App() {
                             disabled={!savedColumnTypeConfig}
                           >
                             Применить сохраненные
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {factsSidebarTab === "processing" && (
+                      <div className="sidebar-section-stack">
+                        <div className="processing-settings-card">
+                          <label className="checkbox-row">
+                            <input
+                              type="radio"
+                              name="processing-option"
+                              checked={processingSettings.selectedOption === "parseReason"}
+                              onChange={() => setProcessingSettings((current) => ({ ...current, selectedOption: "parseReason" }))}
+                            />
+                            Парсинг Провалы
+                          </label>
+                          <label className="checkbox-row">
+                            <input
+                              type="radio"
+                              name="processing-option"
+                              checked={processingSettings.selectedOption === "option2"}
+                              onChange={() => setProcessingSettings((current) => ({ ...current, selectedOption: "option2" }))}
+                            />
+                            Опция 2
+                          </label>
+
+                          {processingSettings.selectedOption === "parseReason" && (
+                            <>
+                              <label>
+                                Столбец из данных
+                                <select
+                                  value={processingSettings.parseReasonColumn}
+                                  onChange={e => setProcessingSettings(s => ({ ...s, parseReasonColumn: e.target.value }))}
+                                  disabled={!loadHeaders.length}
+                                >
+                                  <option value="">Выберите столбец</option>
+                                  {loadHeaders.map((header) => (
+                                    <option key={header} value={header}>{header}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label>
+                                Параметр
+                                <input
+                                  type="text"
+                                  placeholder="Разделитель"
+                                  value={processingSettings.param}
+                                  onChange={e => setProcessingSettings(s => ({ ...s, param: e.target.value }))}
+                                />
+                              </label>
+                              <button className="action-apply" onClick={runProcessingParse} disabled={!loadHeaders.length}>
+                                Парсинг
+                              </button>
+                            </>
+                          )}
+
+                          {processingSettings.selectedOption === "option2" && (
+                            <label>
+                              Режим
+                              <select value={processingSettings.mode} onChange={e => setProcessingSettings(s => ({ ...s, mode: e.target.value }))}>
+                                <option value="mode1">Режим 1</option>
+                                <option value="mode2">Режим 2</option>
+                              </select>
+                            </label>
+                          )}
+                        </div>
+                        <div className="facts-sidebar-actions">
+                          <button className="action-save" onClick={saveProcessingSettings}>
+                            Сохранить настройки
+                          </button>
+                          <button className="action-restore" onClick={restoreProcessingSettings}>
+                            Восстановить сохранённые
                           </button>
                         </div>
                       </div>
@@ -1888,6 +2141,20 @@ function App() {
               <li>Если анализ для шаблона Простои все-таки нужен, требуется отдельно описать ожидаемую бизнес-логику обработки и результат на примерах.</li>
               <li>Практичный порядок доработок: стартовая вкладка Загрузка фактов, защита Настроек, resize и скрытие левой панели Анализа, затем решение по логике анализа Простои.</li>
             </ol>
+          </section>
+        )}
+
+        {activeTab === "journal" && (
+          <section className="panel journal-panel">
+            <h2>Журнал</h2>
+            <div className="journal-list">
+              {journalEntries.map((entry) => (
+                <article key={entry.id} className="journal-entry">
+                  <h3>{entry.title}</h3>
+                  <pre className="journal-entry-text">{entry.text}</pre>
+                </article>
+              ))}
+            </div>
           </section>
         )}
       </main>
