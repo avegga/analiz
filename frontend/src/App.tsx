@@ -62,8 +62,21 @@ const MIN_COLUMN_WIDTH = 60;
 const SETTINGS_TOKEN_STORAGE_KEY = "analiz.settingsAccessToken";
 const ANALYSIS_PANEL_VISIBLE_STORAGE_KEY = "analiz.analysisPanelVisible";
 const ANALYSIS_PANEL_WIDTH_STORAGE_KEY = "analiz.analysisPanelWidth";
+const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "analiz.columnWidths";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
 const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
+  {
+    id: "2026-04-03T12:41:13",
+    title: "03.04.2026 12:41:13",
+    text: [
+      "Упрощено отображение даты в таблице 'Данные' и добавлено автосохранение ширины столбцов.",
+      "- Для явно выбранного типа 'Дата' значения отображаются в формате dd.MM.yy.",
+      "- Для явно выбранного типа 'Дата/время' значения отображаются в формате dd.MM.yy HH:mm.",
+      "- Если тип даты не выбран явно или значение не удалось распарсить, в таблице показывается исходное значение из файла.",
+      "- Ширина столбцов теперь сохраняется автоматически после изменения и восстанавливается между сессиями без нажатия кнопки 'Сохранить конфигурацию'.",
+      "- Ручное сохранение конфигурации столбцов сохранено для набора столбцов и остальных настроек.",
+    ].join("\n"),
+  },
   {
     id: "2026-04-03T12:11:34",
     title: "03.04.2026 12:11:34",
@@ -192,6 +205,34 @@ function readStoredNumber(key: string, fallback: number, min: number, max: numbe
     return fallback;
   }
   return Math.max(min, Math.min(max, rawValue));
+}
+
+function getColumnWidthsStorageKey(templateKey: string): string {
+  return `${COLUMN_WIDTHS_STORAGE_KEY_PREFIX}.${templateKey}`;
+}
+
+function readStoredColumnWidths(templateKey: string, headers: string[]): Record<string, number> {
+  if (!templateKey) {
+    return {};
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(getColumnWidthsStorageKey(templateKey));
+    if (!rawValue) {
+      return {};
+    }
+    return normalizeColumnWidths(JSON.parse(rawValue) as Record<string, number>, headers);
+  } catch {
+    return {};
+  }
+}
+
+function formatShortDate(value: Date): string {
+  return `${String(value.getDate()).padStart(2, "0")}.${String(value.getMonth() + 1).padStart(2, "0")}.${String(value.getFullYear()).slice(-2)}`;
+}
+
+function formatShortDateTime(value: Date): string {
+  return `${formatShortDate(value)} ${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`;
 }
 
 function mergeSeedJournalEntries(entries: JournalEntry[]): JournalEntry[] {
@@ -417,7 +458,20 @@ function formatMoneyValue(value: unknown, hideMoneyCents: boolean): string {
   return `${formatter.format(normalized)} р.`;
 }
 
-function formatCellValue(value: unknown, kind: ColumnKind, generalSettings: FactsGeneralSettings): string {
+function formatCellValue(
+  value: unknown,
+  kind: ColumnKind,
+  explicitType: string | undefined,
+  generalSettings: FactsGeneralSettings,
+): string {
+  if (explicitType === "date" || explicitType === "datetime") {
+    const parsedDate = parseDateValue(value);
+    if (!parsedDate) {
+      return String(value ?? "");
+    }
+    return explicitType === "date" ? formatShortDate(parsedDate) : formatShortDateTime(parsedDate);
+  }
+
   if (kind === "money") {
     return formatMoneyValue(value, generalSettings.hideMoneyCents);
   }
@@ -855,10 +909,10 @@ function App() {
     () => displayedFactRows.map((row) => Object.fromEntries(
       selectedFactColumns.map((header) => [
         header,
-        formatCellValue(row[header], resolvedColumnKinds[header] ?? "string", factsGeneralSettings),
+        formatCellValue(row[header], resolvedColumnKinds[header] ?? "string", columnTypeOverrides[header], factsGeneralSettings),
       ]),
     )),
-    [displayedFactRows, factsGeneralSettings, resolvedColumnKinds, selectedFactColumns],
+    [columnTypeOverrides, displayedFactRows, factsGeneralSettings, resolvedColumnKinds, selectedFactColumns],
   );
 
   function pushNotice(type: NoticeType, text: string) {
@@ -1056,9 +1110,31 @@ function App() {
           next[header] = savedWidths[header];
         }
       });
-      return next;
+      return {
+        ...next,
+        ...readStoredColumnWidths(templateKey, loadHeaders),
+      };
     });
   }, [loadHeaders, savedColumnConfig, templateKey]);
+
+  useEffect(() => {
+    if (!templateKey || !loadHeaders.length || activeColumnResize) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      const normalizedWidths = normalizeColumnWidths(columnWidths, loadHeaders);
+      if (!Object.keys(normalizedWidths).length) {
+        window.localStorage.removeItem(getColumnWidthsStorageKey(templateKey));
+        return;
+      }
+      window.localStorage.setItem(getColumnWidthsStorageKey(templateKey), JSON.stringify(normalizedWidths));
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [activeColumnResize, columnWidths, loadHeaders, templateKey]);
 
   useEffect(() => {
     if (templateKey !== DOWNTIME_TEMPLATE_KEY || activeTab !== "facts") {
@@ -1371,7 +1447,10 @@ function App() {
           next[header] = savedWidths[header];
         }
       });
-      return next;
+      return {
+        ...next,
+        ...readStoredColumnWidths(templateKey, loadHeaders),
+      };
     });
     setStatus("Сохраненная конфигурация столбцов применена.");
     pushNotice("success", "Сохраненная конфигурация столбцов применена.");
@@ -1654,7 +1733,7 @@ function App() {
                 <tr key={rowIndex}>
                   {selectedFactColumns.map((header) => {
                     const width = getEffectiveColumnWidth(header);
-                    const value = formatCellValue(row[header], resolvedColumnKinds[header] ?? "string", factsGeneralSettings);
+                    const value = formatCellValue(row[header], resolvedColumnKinds[header] ?? "string", columnTypeOverrides[header], factsGeneralSettings);
                     return (
                       <td key={header} style={{ width: `${width}px`, minWidth: `${width}px`, maxWidth: `${width}px` }}>
                         <div className="data-cell-value" title={value}>{value}</div>
