@@ -65,6 +65,17 @@ const ANALYSIS_PANEL_WIDTH_STORAGE_KEY = "analiz.analysisPanelWidth";
 const JOURNAL_STORAGE_KEY = "analiz.journalEntries";
 const SEED_JOURNAL_ENTRIES: JournalEntry[] = [
   {
+    id: "2026-04-03T11:52:04",
+    title: "03.04.2026 11:52:04",
+    text: [
+      "Добавлен предпросмотр результата парсинга и откат последнего парсинга.",
+      "- Во вкладке 'Обработка' перед запуском показывается, сколько строк будет создано после парсинга видимых данных.",
+      "- Добавлена кнопка отката последнего парсинга в текущей сессии.",
+      "- Откат возвращает таблицу 'Данные' к состоянию до последнего парсинга.",
+      "- История отката очищается при новой загрузке файла, автозагрузке шаблона 'Простои' и при очистке экрана.",
+    ].join("\n"),
+  },
+  {
     id: "2026-04-03T11:48:56",
     title: "03.04.2026 11:48:56",
     text: [
@@ -445,6 +456,7 @@ function App() {
   const [settingsAuthorized, setSettingsAuthorized] = useState(false);
 
   const [loadResult, setLoadResult] = useState<LoadResponse | null>(null);
+  const [lastParseSnapshot, setLastParseSnapshot] = useState<LoadResponse | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("prepare");
 
@@ -537,6 +549,19 @@ function App() {
     pushNotice("success", "Сохранённые настройки обработки применены.");
   }
 
+  function undoLastProcessingParse() {
+    if (!lastParseSnapshot) {
+      setStatus("Нет парсинга для отката.");
+      pushNotice("info", "Нет парсинга для отката.");
+      return;
+    }
+
+    setLoadResult(lastParseSnapshot);
+    setLastParseSnapshot(null);
+    setStatus("Последний парсинг отменён.");
+    pushNotice("success", "Последний парсинг отменён.");
+  }
+
   function runProcessingParse() {
     if (!loadResult?.rows?.length) {
       setStatus("Нет данных для парсинга.");
@@ -589,6 +614,7 @@ function App() {
       }));
     });
 
+    setLastParseSnapshot(loadResult);
     setLoadResult({
       ...loadResult,
       rows: nextRows,
@@ -761,6 +787,36 @@ function App() {
     }
 
     return displayedFactRows.some((row) => String(row[targetColumn] ?? "").includes(delimiter));
+  }, [displayedFactRows, processingSettings.param, processingSettings.parseReasonColumn, processingSettings.selectedOption]);
+
+  const processingParsePreview = useMemo(() => {
+    if (processingSettings.selectedOption !== "parseReason") {
+      return { parsableRows: 0, createdRows: 0, addedRows: 0 };
+    }
+
+    const targetColumn = processingSettings.parseReasonColumn.trim();
+    const delimiter = processingSettings.param.trim();
+    if (!targetColumn || !delimiter || !displayedFactRows.length) {
+      return { parsableRows: 0, createdRows: 0, addedRows: 0 };
+    }
+
+    let parsableRows = 0;
+    let createdRows = 0;
+
+    displayedFactRows.forEach((row) => {
+      const rawValue = String(row[targetColumn] ?? "");
+      if (!rawValue.includes(delimiter)) {
+        return;
+      }
+      parsableRows += 1;
+      createdRows += rawValue.split(delimiter).length;
+    });
+
+    return {
+      parsableRows,
+      createdRows,
+      addedRows: Math.max(0, createdRows - parsableRows),
+    };
   }, [displayedFactRows, processingSettings.param, processingSettings.parseReasonColumn, processingSettings.selectedOption]);
 
   function getEffectiveColumnWidth(header: string): number {
@@ -1156,6 +1212,7 @@ function App() {
         setBusy(true);
         const res = await loadDowntimeFacts();
         setLoadResult(res);
+        setLastParseSnapshot(null);
         setAnalysisResult(null);
         setStatus(`Загрузка простоя завершена. Источник: ${res.source_file}. Строк: ${res.total_rows}.`);
         pushNotice("success", "Файл простоя загружен автоматически.");
@@ -1181,6 +1238,7 @@ function App() {
       }
       const res = await uploadFacts(effectiveTemplateKey, file);
       setLoadResult(res);
+      setLastParseSnapshot(null);
       setAnalysisResult(null);
       setStatus(
         `Загрузка завершена. Всего: ${res.total_rows}, валидных: ${res.valid_count}, ошибок: ${res.error_count}.`,
@@ -1657,6 +1715,7 @@ function App() {
                   onChange={(e) => {
                     setTemplateKey(e.target.value);
                     setLoadResult(null);
+                    setLastParseSnapshot(null);
                     setFile(null);
                     setColumnFilters({});
                     setDraftColumnFilters({});
@@ -1698,6 +1757,7 @@ function App() {
               <button
                 onClick={() => {
                   setLoadResult(null);
+                  setLastParseSnapshot(null);
                   setVisibleFactColumns([]);
                   setDraftVisibleFactColumns([]);
                   setColumnFilters({});
@@ -1978,8 +2038,16 @@ function App() {
                                   onChange={e => setProcessingSettings(s => ({ ...s, param: e.target.value }))}
                                 />
                               </label>
+                              <div className="processing-preview">
+                                {processingParsePreview.parsableRows > 0
+                                  ? `Будет создано строк: ${processingParsePreview.createdRows}. Заменяемых строк: ${processingParsePreview.parsableRows}. Дополнительно появится: ${processingParsePreview.addedRows}.`
+                                  : "Нет видимых строк, подходящих под выбранный разделитель."}
+                              </div>
                               <button className="action-apply" onClick={runProcessingParse} disabled={!canRunProcessingParse}>
                                 Парсинг
+                              </button>
+                              <button className="action-restore" onClick={undoLastProcessingParse} disabled={!lastParseSnapshot}>
+                                Откатить парсинг
                               </button>
                             </>
                           )}

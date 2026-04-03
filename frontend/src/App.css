@@ -429,6 +429,16 @@ button:disabled {
   font-weight: 700;
 }
 
+.processing-preview {
+  border: 1px solid #d8e3ea;
+  background: #f5f9fc;
+  color: #365062;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .file-pill {
   padding: 8px 10px;
   border-radius: 8px;
