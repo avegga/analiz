@@ -3,6 +3,7 @@ import re
 import uuid
 from pathlib import Path
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 import openpyxl
 from openpyxl.styles import Font
@@ -15,6 +16,74 @@ WINDOWS_RESERVED_FILENAMES = {
     "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
     "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 }
+
+MONEY_TYPES = {"money", "денежный"}
+MONEY_COLUMN_KEYWORDS = ("сумма", "sum", "amount", "стоимость", "price")
+
+
+def _normalize_money_value(value: object) -> object:
+    if value is None or isinstance(value, (int, float)):
+        return value
+
+    raw = str(value).strip()
+    if not raw:
+        return value
+
+    cleaned = raw.replace("\xa0", " ").replace(" ", "")
+    cleaned = re.sub(r"[^0-9,.-]", "", cleaned)
+    cleaned = cleaned.strip(".,")
+    if not cleaned or cleaned in {"-", ".", ","}:
+        return value
+
+    separators = [index for index, char in enumerate(cleaned) if char in {",", "."}]
+    normalized = cleaned
+
+    if separators:
+        separator_index = separators[-1]
+        digits_before = re.sub(r"[.,]", "", cleaned[:separator_index])
+        digits_after = re.sub(r"[.,]", "", cleaned[separator_index + 1 :])
+
+        use_decimal_separator = len(separators) > 1 or (0 < len(digits_after) <= 2)
+        if not use_decimal_separator and len(digits_after) == 3 and len(digits_before) <= 3:
+            use_decimal_separator = True
+
+        if use_decimal_separator:
+            normalized = f"{digits_before}.{digits_after}" if digits_after else digits_before
+            if cleaned.startswith("-") and not normalized.startswith("-"):
+                normalized = f"-{normalized}"
+        else:
+            normalized = re.sub(r"[.,]", "", cleaned)
+
+    try:
+        number = Decimal(normalized)
+    except InvalidOperation:
+        return value
+
+    if number == number.to_integral_value():
+        return int(number)
+    return float(number)
+
+
+def _prepare_rows_for_xlsx(rows: list[dict], column_type_overrides: dict[str, str] | None = None) -> list[dict]:
+    if not column_type_overrides:
+        column_type_overrides = {}
+
+    money_columns = {
+        column_name
+        for column_name, column_type in column_type_overrides.items()
+        if str(column_type).strip().lower() in MONEY_TYPES
+    }
+
+    prepared_rows: list[dict] = []
+    for row in rows:
+        prepared_row: dict = {}
+        for key, value in row.items():
+            normalized_key = str(key).strip().lower()
+            looks_like_money_column = any(keyword in normalized_key for keyword in MONEY_COLUMN_KEYWORDS)
+            should_convert = key in money_columns or looks_like_money_column
+            prepared_row[key] = _normalize_money_value(value) if should_convert else value
+        prepared_rows.append(prepared_row)
+    return prepared_rows
 
 
 def export_rows(rows: list[dict], fmt: str) -> Path:
@@ -76,7 +145,12 @@ def _build_unique_path(target: Path) -> Path:
         index += 1
 
 
-def export_rows_to_xlsx_in_directory(rows: list[dict], target_dir: str | Path, filename: str | None = None) -> Path:
+def export_rows_to_xlsx_in_directory(
+    rows: list[dict],
+    target_dir: str | Path,
+    filename: str | None = None,
+    column_type_overrides: dict[str, str] | None = None,
+) -> Path:
     if not rows:
         raise ValueError("Нет данных для экспорта")
 
@@ -89,12 +163,14 @@ def export_rows_to_xlsx_in_directory(rows: list[dict], target_dir: str | Path, f
     ws = wb.active
     ws.title = "Данные"
 
-    headers = list(rows[0].keys())
+    prepared_rows = _prepare_rows_for_xlsx(rows, column_type_overrides)
+
+    headers = list(prepared_rows[0].keys())
     ws.append(headers)
     for cell in ws[1]:
         cell.font = Font(bold=True)
 
-    for row in rows:
+    for row in prepared_rows:
         ws.append([row.get(h, "") for h in headers])
 
     wb.save(str(out_file))
